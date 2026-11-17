@@ -4,14 +4,13 @@ A personal, read-only MCP server: list meters and tariff agreements, fetch elect
 
 ## 1. Set up on your Docker host
 
-Copy `compose.yaml` and `.env.example` from this repository to a directory on your Docker host, then open a terminal there. The Compose file pulls `ghcr.io/craigmpeters/octopus-mcp:latest` (linux/amd64), so you do not need the source code or a local build. On OpenMediaVault, use the Compose plugin and place the `.env` file alongside the Compose file.
+Copy `compose.yaml` from this repository to a private directory on your Docker host, then open a terminal there. The Compose file pulls `ghcr.io/craigmpeters/octopus-mcp:latest` (linux/amd64), so you do not need the source code or a local build. On OpenMediaVault, use the Compose plugin and enter the account settings directly in its Compose configuration.
 
 The GitHub Actions workflow builds the image on pull requests and publishes it on pushes to `main`. The image will only exist after the first successful publish. New GitHub Container Registry packages may be private: if it is private, make the package public in GitHub Packages settings, or authenticate on the Docker host with `docker login ghcr.io` using a personal access token with `read:packages`. Do not put the token in the Compose file.
 
-1. Copy `.env.example` to `.env`: `cp .env.example .env`.
-2. Set your account number and API key in `.env` using a local editor. Octopus provides keys under its account dashboard's Developer settings: https://octopus.energy/help-and-faqs/articles/how-do-i-access-the-octopus-api/ . Do not paste the key into ChatGPT. Restrict access: `chmod 600 .env`.
-3. Run `docker compose pull` followed by `docker compose up -d`. To update later, run the same two commands.
-4. `docker compose logs --tail=30` should show startup. The endpoint is `http://127.0.0.1:8765/mcp` on that host. The port is bound to loopback only.
+1. Edit the `environment` section in your local Compose file and replace the example account number and API key with your own. Octopus provides keys under its account dashboard's Developer settings: https://octopus.energy/help-and-faqs/articles/how-do-i-access-the-octopus-api/ . Keep the configured file private (for example, `chmod 600 compose.yaml`), never commit it to GitHub or paste your key into ChatGPT. Docker administrators can inspect container environment variables.
+2. Run `docker compose pull` followed by `docker compose up -d`. To update later, run the same two commands.
+3. `docker compose logs --tail=30` should show startup. The endpoint is `http://127.0.0.1:8765/mcp` on that host. The port is bound to loopback only.
 
 ## 2. Connect securely to ChatGPT
 
