@@ -2,7 +2,9 @@ services:
   octopus-mcp:
     image: ghcr.io/craigmpeters/octopus-mcp:latest
     restart: unless-stopped
-    env_file: .env
+    environment:
+      OCTOPUS_ACCOUNT_NUMBER: "A-XXXXXXXX"
+      OCTOPUS_API_KEY: "replace-with-your-api-key"
     ports:
       - "127.0.0.1:8765:8000"
     read_only: true
