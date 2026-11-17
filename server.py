@@ -356,40 +356,76 @@ def tariff_product(product_code: str) -> dict:
     return {'product': product, 'eligibility': 'unknown',
             'note': 'Regional variants and published prices do not establish household eligibility or an actual bill.'}
 
-@mcp.tool()
-def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
-    """Fetch published day and night unit rates for a dual-register tariff, for up to 31 UK dates."""
+def electricity_tariff_path(product_code, tariff_code):
     for code in (product_code, tariff_code):
         if not isinstance(code, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', code):
             raise ValueError('Invalid product or tariff code')
-    if fuel != 'electricity':
-        raise ValueError('Dual-register rates are supported for electricity only')
+    return f'products/{product_code}/electricity-tariffs/{tariff_code}/'
+
+def tariff_rate_period(start_date, end_date):
     start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
     if end < start or (end - start).days > 30:
         raise ValueError('Use at most 31 inclusive days')
     tz = ZoneInfo('Europe/London')
-    params = {'period_from': datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
-              'period_to': datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
-              'page_size': 250}
-    base = f'products/{product_code}/electricity-tariffs/{tariff_code}/'
-    rates = {}
-    for kind in ('day-unit-rates', 'night-unit-rates', 'standing-charges'):
-        path, query, rows, seen = base + kind + '/', params, [], set()
-        for _ in range(20):
-            page = get(path, query)
-            if not isinstance(page, dict) or not isinstance(page.get('results'), list):
-                raise ValueError('Invalid tariff rate response')
-            rows.extend(page['results'])
-            path, query = page.get('next'), None
-            if not path:
-                break
-            if not isinstance(path, str) or path in seen:
-                raise ValueError('Invalid tariff rate pagination')
-            seen.add(path)
-        else:
-            raise ValueError('Too many tariff pages; request a shorter period')
-        rates[kind] = rows
+    return {
+        'period_from': datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
+        'period_to': datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
+    }
+
+def tariff_rate_rows(path, period):
+    query = {**period, 'page_size': 250}
+    rows, seen = [], set()
+    for _ in range(20):
+        page = get(path, query)
+        if not isinstance(page, dict) or not isinstance(page.get('results'), list):
+            raise ValueError('Invalid tariff rate response')
+        rows.extend(page['results'])
+        path, query = page.get('next'), None
+        if not path:
+            return rows
+        if not isinstance(path, str) or path in seen:
+            raise ValueError('Invalid tariff rate pagination')
+        seen.add(path)
+    raise ValueError('Too many tariff pages; request a shorter period')
+
+@mcp.tool()
+def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
+    """Fetch published day and night unit rates for a dual-register tariff, for up to 31 UK dates."""
+    base = electricity_tariff_path(product_code, tariff_code)
+    if fuel != 'electricity':
+        raise ValueError('Dual-register rates are supported for electricity only')
+    period = tariff_rate_period(start_date, end_date)
+    kinds = ('day-unit-rates', 'night-unit-rates', 'standing-charges')
+    rates = {kind: tariff_rate_rows(base + kind + '/', period) for kind in kinds}
     return {'rates': rates, 'note': 'Rates are pence; use VAT-inclusive values. Day/night switching times and meter register allocation must be verified separately. These rates are not a bill or a cost comparison.'}
+
+@mcp.tool()
+def tariff_ev_rates(product_code: str, tariff_code: str, start_date: str, end_date: str) -> dict:
+    """Fetch published rates for a four-rate EV electricity tariff for up to 31 inclusive UK dates.
+
+    Use tariff_product to find codes under four_rate_ev_electricity_tariffs.
+    Returns day, night, EV device peak and off-peak, and standing-charge records.
+    """
+    base = electricity_tariff_path(product_code, tariff_code)
+    period = tariff_rate_period(start_date, end_date)
+    kinds = ('day-unit-rates', 'night-unit-rates', 'ev-device-peak-unit-rates',
+             'ev-device-off-peak-unit-rates', 'standing-charges')
+    paths = {kind: base + kind + '/' for kind in kinds}
+    rates = {kind: tariff_rate_rows(path, period) for kind, path in paths.items()}
+    return {
+        'product_code': product_code,
+        'tariff_code': tariff_code,
+        'start_date': start_date,
+        'end_date_inclusive': end_date,
+        'requested_period_utc': period,
+        'sources': {kind: API + path for kind, path in paths.items()},
+        'rates': rates,
+        'units': {'unit_rates': 'pence/kWh', 'standing_charges': 'pence/day'},
+        'empty_rate_categories': [kind for kind, rows in rates.items() if not rows],
+        'note': ('Rate records preserve Octopus VAT values, payment method and validity timestamps. '
+                 'Validity timestamps are for the published price, not the daily switching hours. '
+                 'Account-specific EV dispatches and rate applicability require separate data.'),
+    }
 
 if __name__ == '__main__':
     mcp.run(transport='streamable-http')

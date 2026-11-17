@@ -47,3 +47,52 @@ def test_dual_rates_fetches_each_register_with_london_date_boundaries(monkeypatc
     assert calls[0][1]['period_to'] == '2025-03-30T23:00:00+00:00'
     with pytest.raises(ValueError):
         server.tariff_dual_rates('../bad', 'E-2R-TEST-A', 'electricity', '2025-03-30', '2025-03-30')
+
+
+def test_ev_rates_keep_published_bands_separate_and_report_empty_category(monkeypatch):
+    base = 'products/EV-TEST/electricity-tariffs/E-1R-EV-TEST-A/'
+    second_page = server.API + base + 'ev-device-off-peak-unit-rates/?page=2'
+    row = {
+        'value_exc_vat': 6.667, 'value_inc_vat': 7.00035,
+        'valid_from': '2025-09-01T00:00:00Z', 'valid_to': None,
+        'payment_method': 'DIRECT_DEBIT',
+    }
+    later = {**row, 'value_inc_vat': 7.5, 'payment_method': 'NON_DIRECT_DEBIT'}
+    calls = []
+
+    def fake_get(path, params=None):
+        calls.append((path, params))
+        if path == second_page:
+            return {'results': [later], 'next': None}
+        if path == base + 'ev-device-peak-unit-rates/':
+            return {'results': [], 'next': None}
+        next_page = second_page if path == base + 'ev-device-off-peak-unit-rates/' else None
+        return {'results': [row], 'next': next_page}
+
+    monkeypatch.setattr(server, 'get', fake_get)
+
+    result = server.tariff_ev_rates('EV-TEST', 'E-1R-EV-TEST-A', '2025-10-26', '2025-10-26')
+
+    assert result['requested_period_utc'] == {
+        'period_from': '2025-10-25T23:00:00+00:00', 'period_to': '2025-10-27T00:00:00+00:00',
+    }
+    assert (second_page, None) in calls
+    assert result['rates'] == {
+        'day-unit-rates': [row], 'night-unit-rates': [row],
+        'ev-device-peak-unit-rates': [], 'ev-device-off-peak-unit-rates': [row, later],
+        'standing-charges': [row],
+    }
+    assert result['empty_rate_categories'] == ['ev-device-peak-unit-rates']
+    assert result['sources']['ev-device-off-peak-unit-rates'] == second_page.removesuffix('?page=2')
+    assert result['units'] == {'unit_rates': 'pence/kWh', 'standing_charges': 'pence/day'}
+
+
+def test_ev_rates_rejects_invalid_request_before_fetching(monkeypatch):
+    def unexpected_get(*args):
+        pytest.fail('Invalid input must be rejected before fetching')
+
+    monkeypatch.setattr(server, 'get', unexpected_get)
+    with pytest.raises(ValueError, match='Invalid product or tariff code'):
+        server.tariff_ev_rates('EV-TEST', 'bad/code', '2025-01-01', '2025-01-02')
+    with pytest.raises(ValueError, match='31 inclusive days'):
+        server.tariff_ev_rates('EV-TEST', 'E-1R-EV-TEST-A', '2025-01-01', '2025-02-01')

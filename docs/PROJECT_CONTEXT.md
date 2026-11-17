@@ -23,7 +23,7 @@ Build a personal, read-only-first Octopus Energy MCP service that helps answer:
 
 ## Existing baseline (as reviewed 2026-11-17)
 
-- Python FastMCP server in `server.py` with `list_meters`, `consumption`, `tariff_rates`, `tariff_products`, `tariff_product`, and `tariff_dual_rates`.
+- Python FastMCP server in `server.py` with `list_meters`, `consumption`, `tariff_rates`, `tariff_products`, `tariff_product`, `tariff_dual_rates`, and `tariff_ev_rates`.
 - Octopus REST API via `httpx`; electricity import/export and gas meters can appear in account discovery.
 - `consumption` accepts a selected meter point and serial number and fetches up to 31 inclusive UK calendar dates.
 - `tariff_rates` currently reads standard unit rates and standing charges only; it is **not** a complete tariff comparison engine.
@@ -43,6 +43,7 @@ Build a personal, read-only-first Octopus Energy MCP service that helps answer:
 
 ## Important distinctions
 
+- MCP provides reusable data and its provenance. ChatGPT, Jupyter or another client performs cost calculations, comparisons and simulations using that data.
 - Octopus import/export meter data does **not** directly measure solar generation or EV charging consumption.
 - Home Assistant can provide supplementary telemetry **only if relevant entities exist** and are configured.
 - Intelligent Octopus dispatch and other special charging adjustments require supported, verified data sources; standard tariff rates alone are insufficient.

@@ -3,7 +3,7 @@
 ## Data flow
 
 ```text
-ChatGPT (questions, explanations, decisions)
+ChatGPT or Jupyter (questions, analysis, decisions)
   |
   v
 OpenAI Secure MCP Tunnel (private transport)
@@ -18,21 +18,19 @@ Octopus MCP service (FastMCP; read-only by default)
   |    |-- Meter discovery, direction and time-bounded selection
   |    |-- Interval normalization, UK timezone and coverage
   |    |-- Tariff catalogue, eligibility and rate normalization
-  |    |-- Deterministic tariff replay and cost calculations
-  |    |-- Solar/export and EV analysis
-  |    |-- Future battery simulations
+  |    |-- Solar, export and EV data discovery
   |-- Validation, structured errors and provenance
 ```
 
 ## Boundaries
 
-**Interface:** MCP tools return structured results, units, data coverage, source timestamps and limitations. ChatGPT explains results but must not be the only place where money calculations are performed.
+**Interface:** MCP tools return source records with units, provenance, coverage, timestamps and limitations. The same data can support analysis in ChatGPT or a Jupyter notebook.
 
 **Octopus adapter:** authenticated read-only HTTP requests with bounded timeouts/retries, safe pagination and redacted errors. Do not allow arbitrary user-provided URLs or cross-origin pagination.
 
 **Home Assistant adapter (planned):** optional, explicitly configured, minimal-access telemetry. Prefer read-only access and explicit entity allowlists; never expose HA to the public internet to make this work. A Home Assistant token may allow writes despite the plugin only issuing GETs, so protect it accordingly.
 
-**Analysis engine:** pure, deterministic, unit-tested functions. Keep electricity import costs, export earnings and gas costs distinct before producing a net total. Preserve interval granularity for time-of-use tariffs.
+**Client analysis:** ChatGPT, Jupyter or another client can price usage, compare tariffs and simulate batteries. Preserve interval granularity at the MCP boundary so clients can join usage and rates without losing time-of-use detail.
 
 **Deployment:** private Docker network and Secure MCP Tunnel; no unauthenticated public MCP endpoint. Keep the existing container hardening (non-root, read-only filesystem, no-new-privileges, dropped capabilities) and verify tunnel/client networking on the actual deployment.
 
@@ -44,7 +42,7 @@ Octopus MCP service (FastMCP; read-only by default)
 - Electricity import/export energy: kWh. Gas readings: retain original unit; convert only with validated unit and conversion inputs.
 - Tariff rates: distinguish VAT-inclusive/exclusive, pence/kWh, pence/day, import/export and time applicability.
 - Track meter validity and tariff agreement validity separately. An active agreement does not alone prove a particular physical meter is installed.
-- Never count export as negative import; present separate import cost, export revenue, standing charges and gas.
+- Return import, export, gas and standing-charge data separately so clients can combine them when appropriate.
 
 ## Security and privacy
 
@@ -67,12 +65,9 @@ octopus_mcp/
   models.py           # Normalized schemas
   tariffs.py          # Catalogue and eligibility
   rates.py            # Rate normalization
-  pricing.py          # Interval-level deterministic cost engine
-  comparison.py       # Tariff replay
   home_assistant.py   # Optional read-only telemetry
-  solar.py            # Solar/export analysis
-  ev.py               # Charging analysis
-  battery.py          # Battery scenario simulator
+  solar.py            # Solar and export telemetry
+  ev.py               # EV and dispatch data
 ```
 
 Refactor incrementally; do not require a wholesale rewrite before delivering tested improvements.
