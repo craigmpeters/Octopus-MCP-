@@ -1,5 +1,6 @@
 """Personal, local-only, read-only Octopus Energy MCP server."""
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
@@ -316,6 +317,79 @@ def tariff_rates(product_code: str, tariff_code: str, fuel: str, start_date: str
             raise ValueError('Too many tariff pages; request a shorter period')
         result[kind] = rows
     return {'rates': result, 'note': 'Rates are in pence; use VAT-inclusive values. Standard rates may not capture EV dispatch, export, dual-rate, discounts or actual bills.'}
+
+@mcp.tool()
+def tariff_products(available_at: str) -> dict:
+    """List Octopus products available at an aware ISO timestamp. Availability is not household eligibility."""
+    try:
+        instant = datetime.fromisoformat(available_at.replace('Z', '+00:00'))
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            raise ValueError
+    except (ValueError, TypeError, AttributeError):
+        raise ValueError('available_at must be an ISO timestamp with a timezone') from None
+    path, params, products = 'products/', {'available_at': instant.astimezone(timezone.utc).isoformat(), 'page_size': 100}, []
+    seen = set()
+    for _ in range(20):
+        page = get(path, params)
+        if not isinstance(page, dict) or not isinstance(page.get('results'), list):
+            raise ValueError('Invalid product catalogue response')
+        products.extend(page['results'])
+        path, params = page.get('next'), None
+        if not path:
+            break
+        if not isinstance(path, str) or path in seen:
+            raise ValueError('Invalid product catalogue pagination')
+        seen.add(path)
+    else:
+        raise ValueError('Too many product pages')
+    return {'available_at': instant.astimezone(timezone.utc).isoformat(), 'products': products,
+            'eligibility': 'unknown', 'note': 'Published availability does not establish household eligibility. Check region, meter, payment method, export and product-specific requirements.'}
+
+@mcp.tool()
+def tariff_product(product_code: str) -> dict:
+    """Retrieve a product and its regional tariff variants; eligibility is not established."""
+    if not isinstance(product_code, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', product_code):
+        raise ValueError('Invalid product code')
+    product = get(f'products/{product_code}/')
+    if not isinstance(product, dict):
+        raise ValueError('Invalid product response')
+    return {'product': product, 'eligibility': 'unknown',
+            'note': 'Regional variants and published prices do not establish household eligibility or an actual bill.'}
+
+@mcp.tool()
+def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
+    """Fetch published day and night unit rates for a dual-register tariff, for up to 31 UK dates."""
+    for code in (product_code, tariff_code):
+        if not isinstance(code, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', code):
+            raise ValueError('Invalid product or tariff code')
+    if fuel != 'electricity':
+        raise ValueError('Dual-register rates are supported for electricity only')
+    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    if end < start or (end - start).days > 30:
+        raise ValueError('Use at most 31 inclusive days')
+    tz = ZoneInfo('Europe/London')
+    params = {'period_from': datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
+              'period_to': datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
+              'page_size': 250}
+    base = f'products/{product_code}/electricity-tariffs/{tariff_code}/'
+    rates = {}
+    for kind in ('day-unit-rates', 'night-unit-rates', 'standing-charges'):
+        path, query, rows, seen = base + kind + '/', params, [], set()
+        for _ in range(20):
+            page = get(path, query)
+            if not isinstance(page, dict) or not isinstance(page.get('results'), list):
+                raise ValueError('Invalid tariff rate response')
+            rows.extend(page['results'])
+            path, query = page.get('next'), None
+            if not path:
+                break
+            if not isinstance(path, str) or path in seen:
+                raise ValueError('Invalid tariff rate pagination')
+            seen.add(path)
+        else:
+            raise ValueError('Too many tariff pages; request a shorter period')
+        rates[kind] = rows
+    return {'rates': rates, 'note': 'Rates are pence; use VAT-inclusive values. Day/night switching times and meter register allocation must be verified separately. These rates are not a bill or a cost comparison.'}
 
 if __name__ == '__main__':
     mcp.run(transport='streamable-http')
