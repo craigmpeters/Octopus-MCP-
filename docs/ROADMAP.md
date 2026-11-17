@@ -11,7 +11,7 @@ This roadmap is prioritized, not a claim of completed features. Each phase shoul
 - Preserve the existing `list_meters`, `consumption` and `tariff_rates` tools.
 
 ## Phase 1 — PR #2: Meter reliability and consumption validation
-**Priority:** Critical. **Status:** In progress. Consumption date-window filtering and duplicate detection are implemented with mocked DST and pagination tests; completeness reporting and live validation remain outstanding.
+**Priority:** Critical. **Status:** In progress. Consumption date-window filtering, duplicate detection and explicit half-hour coverage reporting are implemented with mocked DST, gap and pagination tests; meter selection and live validation of coverage reporting remain outstanding.
 
 - Identify electricity import, electricity export and gas separately, including historical meters and date-relevant agreements.
 - Report ambiguous current meter candidates instead of guessing.
