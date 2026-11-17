@@ -58,7 +58,7 @@ def test_unowned_meter_rejected():
         server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
 
 
-def test_gas_unit_remains_unknown_and_agreements_overlap_window():
+def test_gas_unit_and_agreements_overlap_window():
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     records = [interval(start + timedelta(minutes=30 * n)) for n in range(48)]
     supply = [{
@@ -70,17 +70,48 @@ def test_gas_unit_remains_unknown_and_agreements_overlap_window():
             {'tariff_code': 'DURING', 'valid_from': '2025-01-01T00:00:00Z', 'valid_to': None},
         ],
     }]
-    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', return_value={'results': records, 'next': None}):
+    with patch.object(server, 'supplies', return_value=supply), \
+            patch.object(server, 'get', return_value={'results': records, 'next': None}), \
+            patch.object(server, 'gas_consumption_unit', return_value='m³'):
         result = server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
     assert result['measurement'] == {
         'value_field': 'consumption',
-        'quantity': 'volume_or_energy',
-        'unit': None,
-        'unit_status': 'not_provided_by_api',
+        'quantity': 'volume',
+        'unit': 'm³',
+        'unit_status': 'known',
+        'unit_source': 'kraken_graphql_consumptionUnits',
         'conversion_applied': False,
     }
     assert [agreement['tariff_code'] for agreement in result['applicable_agreements']] == ['DURING']
-    assert 'does not identify' in result['unit_note']
+    assert 'reported by Octopus in m³' in result['unit_note']
+
+
+def test_gas_unit_lookup_failure_is_explicit():
+    with patch.object(server, 'gas_consumption_unit', side_effect=ValueError):
+        measurement = server.consumption_measurement('gas', 'abc')
+    assert measurement == {
+        'value_field': 'consumption',
+        'quantity': 'volume_or_energy',
+        'unit': None,
+        'unit_status': 'lookup_failed',
+        'unit_source': None,
+        'conversion_applied': False,
+    }
+
+
+def test_graphql_gas_unit_matches_selected_meter():
+    responses = [
+        {'obtainKrakenToken': {'token': 'token'}},
+        {'account': {'properties': [{'gasMeterPoints': [{'meters': [
+            {'serialNumber': 'old', 'consumptionUnits': None},
+            {'serialNumber': 'current', 'consumptionUnits': 'm³'},
+        ]}]}]}},
+    ]
+    with patch.object(server, 'graphql_request', side_effect=responses) as request:
+        assert server.gas_consumption_unit('current') == 'm³'
+    assert request.call_count == 2
+    assert request.call_args_list[1].args[1] == {'accountNumber': server.ACCOUNT}
+    assert request.call_args_list[1].args[2] == 'token'
 
 
 def test_coverage_reports_consecutive_missing_intervals_as_one_gap():

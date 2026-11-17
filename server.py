@@ -7,6 +7,7 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 
 API = 'https://api.octopus.energy/v1/'
+GRAPHQL_API = 'https://api.oegb-kraken.energy/v1/graphql/'
 KEY = os.getenv('OCTOPUS_API_KEY', '')
 ACCOUNT = os.getenv('OCTOPUS_ACCOUNT_NUMBER', '')
 mcp = FastMCP('Personal Octopus Energy', host='0.0.0.0', port=8000, stateless_http=True, json_response=True)
@@ -31,6 +32,48 @@ def get(path, params=None):
 def account():
     return get('accounts/' + quote(ACCOUNT, safe='') + '/')
 
+def graphql_request(query, variables, token=None):
+    if not KEY or not ACCOUNT:
+        raise ValueError('Set OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER on the server.')
+    headers = {'Authorization': token} if token else None
+    try:
+        with httpx.Client(timeout=30, follow_redirects=False) as client:
+            response = client.post(GRAPHQL_API, headers=headers, json={'query': query, 'variables': variables})
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.RequestError, httpx.HTTPStatusError, ValueError):
+        raise ValueError('Unable to retrieve Octopus GraphQL metadata') from None
+    if not isinstance(payload, dict) or payload.get('errors') or not isinstance(payload.get('data'), dict):
+        raise ValueError('Unable to retrieve Octopus GraphQL metadata')
+    return payload['data']
+
+def gas_consumption_unit(serial_number):
+    token_data = graphql_request(
+        'mutation ObtainToken($input: ObtainJSONWebTokenInput!) '
+        '{ obtainKrakenToken(input: $input) { token } }',
+        {'input': {'APIKey': KEY}},
+    )
+    try:
+        token = token_data['obtainKrakenToken']['token']
+    except (KeyError, TypeError):
+        raise ValueError('Unable to retrieve Octopus GraphQL metadata') from None
+    if not isinstance(token, str) or not token:
+        raise ValueError('Unable to retrieve Octopus GraphQL metadata')
+    account_data = graphql_request(
+        'query GasConsumptionUnits($accountNumber: String!) '
+        '{ account(accountNumber: $accountNumber) '
+        '{ properties { gasMeterPoints { meters { serialNumber consumptionUnits } } } } }',
+        {'accountNumber': ACCOUNT},
+        token,
+    )
+    try:
+        meters = [meter for prop in account_data['account']['properties']
+                  for point in prop['gasMeterPoints'] for meter in point['meters']]
+    except (KeyError, TypeError):
+        raise ValueError('Unable to retrieve Octopus GraphQL metadata') from None
+    return next((meter.get('consumptionUnits') for meter in meters
+                 if meter.get('serialNumber') == serial_number), None)
+
 def parse_api_datetime(value):
     if value is None:
         return None
@@ -52,7 +95,7 @@ def agreement_overlaps(agreement, window_start, window_end):
     valid_to = parse_api_datetime(agreement.get('valid_to'))
     return (valid_from is None or valid_from < window_end) and (valid_to is None or window_start < valid_to)
 
-def consumption_measurement(fuel):
+def consumption_measurement(fuel, serial_number=None):
     if fuel == 'electricity':
         return {
             'value_field': 'consumption',
@@ -61,11 +104,26 @@ def consumption_measurement(fuel):
             'unit_status': 'known',
             'conversion_applied': False,
         }
+    try:
+        unit = gas_consumption_unit(serial_number)
+        unit = unit.strip() if isinstance(unit, str) else unit
+        unit_status = 'known' if unit else 'unavailable_for_meter'
+    except ValueError:
+        unit = None
+        unit_status = 'lookup_failed'
+    normalized = unit.strip().lower().replace(' ', '') if isinstance(unit, str) else None
+    if normalized == 'kwh':
+        unit, quantity = 'kWh', 'energy'
+    elif normalized in ('m3', 'm^3', 'm³'):
+        unit, quantity = 'm³', 'volume'
+    else:
+        quantity = 'volume_or_energy'
     return {
         'value_field': 'consumption',
-        'quantity': 'volume_or_energy',
-        'unit': None,
-        'unit_status': 'not_provided_by_api',
+        'quantity': quantity,
+        'unit': unit,
+        'unit_status': unit_status,
+        'unit_source': 'kraken_graphql_consumptionUnits' if unit else None,
         'conversion_applied': False,
     }
 
@@ -225,9 +283,13 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
     coverage = consumption_coverage(records, window_start, window_end)
     applicable_agreements = [agreement for agreement in supply.get('agreements', [])
                              if agreement_overlaps(agreement, window_start, window_end)]
-    measurement = consumption_measurement(fuel)
-    unit_note = ('Consumption values are kWh.' if fuel == 'electricity' else
-                 'The API response does not identify whether gas values are m³ or kWh. No conversion has been applied.')
+    measurement = consumption_measurement(fuel, serial_number)
+    if fuel == 'electricity':
+        unit_note = 'Consumption values are kWh.'
+    elif measurement['unit']:
+        unit_note = f"Gas consumption values are reported by Octopus in {measurement['unit']}. No conversion has been applied."
+    else:
+        unit_note = 'The gas unit could not be established for this meter. No conversion has been applied.'
     return {'fuel': fuel, 'start_date': start_date, 'end_date_inclusive': end_date, 'records': records, 'record_count': len(records), 'coverage': coverage, 'measurement': measurement, 'applicable_agreements': applicable_agreements, 'unit_note': unit_note, 'coverage_note': 'Missing or delayed intervals are not zero; dates converted from Europe/London. Returned intervals are sorted and restricted to the requested date window.'}
 
 @mcp.tool()
