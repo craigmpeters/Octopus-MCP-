@@ -1,73 +1,53 @@
-# Target Architecture
+# Octopus MCP architecture
 
-## Data flow
+Octopus MCP serves one configured Octopus Energy account. Clients retrieve interval readings, meter metadata and published prices for analysis in ChatGPT or Jupyter. The Python process has no application database. Tool results, including household identifiers and usage, travel back to the client and are subject to its retention settings.
 
-```text
-ChatGPT or Jupyter (questions, analysis, decisions)
-  |
-  v
-OpenAI Secure MCP Tunnel (private transport)
-  |
-  v
-Octopus MCP service (FastMCP; read-only by default)
-  |-- Tool/API layer: stable, documented MCP interfaces
-  |-- Data access adapters
-  |    |-- Octopus REST API: account, meters, consumption, products, rates
-  |    |-- Optional Home Assistant: solar, charger, battery and household sensors
-  |-- Domain services
-  |    |-- Meter discovery, direction and time-bounded selection
-  |    |-- Interval normalization, UK timezone and coverage
-  |    |-- Tariff catalogue, eligibility and rate normalization
-  |    |-- Solar, export and EV data discovery
-  |-- Validation, structured errors and provenance
+## Running system
+
+```mermaid
+flowchart LR
+    Client[ChatGPT] --> Tunnel[OpenAI Secure MCP Tunnel]
+    Tunnel --> Host["Host loopback · port 8765"]
+    Local[Local MCP client] --> Host
+    Host --> Service["FastMCP /mcp · container port 8000"]
+    Service -->|Account, consumption, products and rates| REST[Octopus REST API]
+    Service -->|Token exchange and gas unit lookup| Kraken[Kraken GraphQL API]
 ```
 
-## Boundaries
+The tunnel is configured separately by the operator. Compose publishes the container's `0.0.0.0:8000` listener on `127.0.0.1:8765`. FastMCP serves stateless Streamable HTTP with JSON responses. The application has no caller authentication. Any caller with network access to the listener can use the configured account, including peers that can reach the container directly. Meter ownership checks limit the selected meter to that account. The deployment guide covers tunnel setup and verification. [README](../README.md)
 
-**Interface:** MCP tools return source records with units, provenance, coverage, timestamps and limitations. The same data can support analysis in ChatGPT or a Jupyter notebook.
+### Tool surface
 
-**Octopus adapter:** authenticated read-only HTTP requests with bounded timeouts/retries, safe pagination and redacted errors. Do not allow arbitrary user-provided URLs or cross-origin pagination.
+All seven synchronous tools, their domain logic and the HTTP adapters live in [server.py](../server.py).
 
-**Home Assistant adapter (planned):** optional, explicitly configured, minimal-access telemetry. Prefer read-only access and explicit entity allowlists; never expose HA to the public internet to make this work. A Home Assistant token may allow writes despite the plugin only issuing GETs, so protect it accordingly.
+| Tool | Data flow and result |
+| --- | --- |
+| `list_meters` | Reads account properties and groups meter candidates and agreements by supply point. Returns the compatible flat meter list alongside selection metadata. |
+| `consumption` | Matches fuel, point and serial against the account inventory before fetching readings. Returns sorted half-hours, coverage gaps, overlapping agreements and measurement metadata. |
+| `tariff_products` | Pages through published products at a timezone-aware instant. Household eligibility is unknown. |
+| `tariff_product` | Retrieves one product and its regional variants. |
+| `tariff_rates` | Retrieves standard unit rates and standing charges for electricity or gas. |
+| `tariff_dual_rates` | Retrieves electricity day, night and standing-charge records. |
+| `tariff_ev_rates` | Retrieves four published electricity rate bands and standing charges, with source URLs and empty categories. |
 
-**Client analysis:** ChatGPT, Jupyter or another client can price usage, compare tariffs and simulate batteries. Preserve interval granularity at the MCP boundary so clients can join usage and rates without losing time-of-use detail.
+Consumption and rate requests accept up to 31 inclusive UK dates. Local midnight boundaries in `Europe/London` define a half-open UTC window. Consumption excludes out-of-window readings, rejects duplicate or misaligned half-hours and represents gaps explicitly. A UK day can contain 46, 48 or 50 half-hours. Agreement validity and physical meter installation dates are separate facts. Multiple serials can remain ambiguous even when one agreement is active.
 
-**Deployment:** private Docker network and Secure MCP Tunnel; no unauthenticated public MCP endpoint. Keep the existing container hardening (non-root, read-only filesystem, no-new-privileges, dropped capabilities) and verify tunnel/client networking on the actual deployment.
+Electricity consumption is in kWh. Gas readings retain the reported unit where available. A failed metadata lookup returns readings with a unit status of `lookup_failed`, while an absent meter unit yields `unavailable_for_meter`. Clients combine usage and prices, preserving VAT basis, validity periods, payment method, and the distinction between pence/kWh and pence/day. Published bands alone cannot establish switching hours or account-specific EV dispatch.
 
-## Temporal and units model
+### Credentials, requests and failures
 
-- Store/compare energy intervals as timezone-aware UTC start/end instants; group reports by `Europe/London` local dates.
-- UK clock changes produce 46 or 50 half-hour intervals on transition days; do not assume 48 every day.
-- Missing readings are **unknown**, not zero. Detect duplicates, gaps, out-of-window data and ambiguous meter selections.
-- Electricity import/export energy: kWh. Gas readings: retain original unit; convert only with validated unit and conversion inputs.
-- Tariff rates: distinguish VAT-inclusive/exclusive, pence/kWh, pence/day, import/export and time applicability.
-- Track meter validity and tariff agreement validity separately. An active agreement does not alone prove a particular physical meter is installed.
-- Return import, export, gas and standing-charge data separately so clients can combine them when appropriate.
+The process reads `OCTOPUS_ACCOUNT_NUMBER` and `OCTOPUS_API_KEY` at startup. REST GETs use HTTP Basic authentication against the Octopus API. For gas metadata, the service posts the key to the fixed Kraken GraphQL token endpoint, then sends the returned token in the Authorization header to that same endpoint to query the account. This token exchange supports read-only energy queries.
 
-## Security and privacy
+HTTPX disables redirect following and uses a 30-second timeout on network operations. Each page opens a new client. Pagination loops stop after 20 pages per collection. Those limits leave the total call duration and response bytes uncapped by the application. REST transport and status failures produce short tool errors. Product catalogue and newer rate helpers validate the results list, while consumption and standard rates currently interpret a missing results field as an empty list.
 
-- Secrets via deployment environment/secret management, never repository files, logs, errors or test fixtures.
-- Validate account ownership of requested meters; do not expose identifiers unnecessarily in summaries.
-- Limit date ranges, response sizes and pagination; retry only transient failures.
-- Treat Octopus and Home Assistant API responses as untrusted external data.
-- Default to read-only. Any future device control requires a separate design, explicit authorization and safety limits.
-- Keep GHCR publication and production deployment separate: opening a PR must not deploy; merge/release should be deliberate.
+REST pagination currently accepts both the Octopus REST host and the Kraken host and applies the REST credential to either. The intended boundary is the original REST origin. The contributor guide records this as pending work. Treat request URLs as sensitive because paths can contain account numbers, meter points and serials. [Contributor guide](../AGENTS.md)
 
-## Proposed module boundaries (not all implemented)
+### Packaging and release
 
-```text
-octopus_mcp/
-  server.py           # MCP registration
-  client.py           # Octopus API adapter
-  meters.py           # Meter identity, import/export and validity
-  consumption.py      # Retrieval and coverage
-  time_utils.py       # Europe/London/UTC handling
-  models.py           # Normalized schemas
-  tariffs.py          # Catalogue and eligibility
-  rates.py            # Rate normalization
-  home_assistant.py   # Optional read-only telemetry
-  solar.py            # Solar and export telemetry
-  ev.py               # EV and dispatch data
-```
+The Python 3.12 image runs under UID/GID 65534. Compose sets a read-only filesystem, drops Linux capabilities and enables no-new-privileges. CI runs pytest on pushes and pull requests. Container PR builds targeting main build the image locally on the runner. Pushes to main and manual workflow runs publish linux/amd64 images to GHCR tagged with the commit SHA and latest. Updating the running Docker host is a separate operator action. [Container workflow](../.github/workflows/container.yml) · [Compose configuration](../compose.yaml)
 
-Refactor incrementally; do not require a wholesale rewrite before delivering tested improvements.
+## Target design
+
+Extract modules incrementally as changes create a reason to do so. Keep tool registration in the server, isolate transport and credential handling in a client, and group meter selection, interval coverage, UK time windows, tariff discovery and rate normalization by responsibility. Share normalized models where callers need stable contracts. Adapter hardening includes bounded response sizes, same-origin pagination, redacted errors and bounded retries for transient failures.
+
+A future optional Home Assistant adapter would supply allowlisted solar, EV charger and battery telemetry using protected, minimal-access credentials. Keep measured and inferred quantities distinct. Pricing and battery simulation belong in clients. Device control requires its own authorization and safety design. The roadmap tracks live verification and feature status. [Decisions](DECISIONS.md) · [Roadmap](ROADMAP.md)
