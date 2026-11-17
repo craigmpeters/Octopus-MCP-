@@ -18,7 +18,7 @@ The tunnel is configured separately by the operator. Compose publishes the conta
 
 ### Tool surface
 
-All seven synchronous tools, their domain logic and the HTTP adapters live in [server.py](../server.py).
+The seven async MCP tools and their domain logic live in [server.py](../server.py). They share a request-scoped REST and GraphQL adapter in [upstream.py](../upstream.py).
 
 | Tool | Data flow and result |
 | --- | --- |
@@ -38,9 +38,9 @@ Electricity consumption is in kWh. Gas readings retain the reported unit where a
 
 The process reads `OCTOPUS_ACCOUNT_NUMBER` and `OCTOPUS_API_KEY` at startup. REST GETs use HTTP Basic authentication against the Octopus API. For gas metadata, the service posts the key to the fixed Kraken GraphQL token endpoint, then sends the returned token in the Authorization header to that same endpoint to query the account. This token exchange supports read-only energy queries.
 
-HTTPX disables redirect following and uses a 30-second timeout on network operations. Each page opens a new client. Pagination loops stop after 20 pages per collection. Those limits leave the total call duration and response bytes uncapped by the application. REST transport and status failures produce short tool errors. Product catalogue and newer rate helpers validate the results list, while consumption and standard rates currently interpret a missing results field as an empty list.
+Each tool call owns one HTTPX client and a 60-second deadline for upstream I/O. The adapter disables redirects and accepts REST continuations only on the original HTTPS origin. It attaches Basic auth per REST request. The separate fixed GraphQL endpoint receives only the credentials needed for each GraphQL operation. Request URLs can contain account numbers, meter points and serials, so treat logs as sensitive.
 
-REST pagination currently accepts both the Octopus REST host and the Kraken host and applies the REST credential to either. The intended boundary is the original REST origin. The contributor guide records this as pending work. Treat request URLs as sensitive because paths can contain account numbers, meter points and serials. [Contributor guide](../AGENTS.md)
+The adapter requests identity encoding and streams each response, with limits of 4 MiB per body, 16 MiB across the call and 20 pages per collection. The call budget covers account discovery, pagination, gas metadata and all requested rate categories. Transport failures, invalid JSON, missing results lists and invalid continuations produce short errors. An empty results list is valid. The optional gas unit lookup can fail independently of reading retrieval.
 
 ### Packaging and release
 
@@ -48,6 +48,6 @@ The Python 3.12 image runs under UID/GID 65534. Compose sets a read-only filesys
 
 ## Target design
 
-Extract modules incrementally as changes create a reason to do so. Keep tool registration in the server, isolate transport and credential handling in a client, and group meter selection, interval coverage, UK time windows, tariff discovery and rate normalization by responsibility. Share normalized models where callers need stable contracts. Adapter hardening includes bounded response sizes, same-origin pagination, redacted errors and bounded retries for transient failures.
+Extract modules incrementally as changes create a reason to do so. Keep tool registration in the server, isolate transport and credential handling in a client, and group meter selection, interval coverage, UK time windows, tariff discovery and rate normalization by responsibility. Share normalized models where callers need stable contracts. Any future retries for transient failures must fit the same per-call deadline and byte budget.
 
 A future optional Home Assistant adapter would supply allowlisted solar, EV charger and battery telemetry using protected, minimal-access credentials. Keep measured and inferred quantities distinct. Pricing and battery simulation belong in clients. Device control requires its own authorization and safety design. The roadmap tracks live verification and feature status. [Decisions](DECISIONS.md) · [Roadmap](ROADMAP.md)

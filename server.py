@@ -2,57 +2,21 @@
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
-from urllib.parse import quote, urlparse
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
-import httpx
 from mcp.server.fastmcp import FastMCP
 
-API = 'https://api.octopus.energy/v1/'
-GRAPHQL_API = 'https://api.oegb-kraken.energy/v1/graphql/'
+from upstream import API, upstream_call
+
 KEY = os.getenv('OCTOPUS_API_KEY', '')
 ACCOUNT = os.getenv('OCTOPUS_ACCOUNT_NUMBER', '')
 mcp = FastMCP('Personal Octopus Energy', host='0.0.0.0', port=8000, stateless_http=True, json_response=True)
 
-def get(path, params=None):
-    if not KEY or not ACCOUNT:
-        raise ValueError('Set OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER on the server.')
-    url = path if path.startswith('https://') else API + path.lstrip('/')
-    parsed = urlparse(url)
-    if parsed.scheme != 'https' or parsed.hostname not in ('api.octopus.energy', 'api.oegb-kraken.energy') or parsed.username or parsed.password or parsed.port not in (None, 443):
-        raise ValueError('Unexpected API pagination URL')
-    try:
-        with httpx.Client(auth=(KEY, ''), timeout=30, follow_redirects=False) as client:
-            response = client.get(url, params=params)
-            response.raise_for_status()
-            return response.json()
-    except httpx.HTTPStatusError as exc:
-        raise ValueError(f'Octopus API returned HTTP {exc.response.status_code}; check account, access and requested data.') from None
-    except httpx.RequestError:
-        raise ValueError('Unable to reach the Octopus API; try again later.') from None
-
-def account():
-    return get('accounts/' + quote(ACCOUNT, safe='') + '/')
-
-def graphql_request(query, variables, token=None):
-    if not KEY or not ACCOUNT:
-        raise ValueError('Set OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER on the server.')
-    headers = {'Authorization': token} if token else None
-    try:
-        with httpx.Client(timeout=30, follow_redirects=False) as client:
-            response = client.post(GRAPHQL_API, headers=headers, json={'query': query, 'variables': variables})
-            response.raise_for_status()
-            payload = response.json()
-    except (httpx.RequestError, httpx.HTTPStatusError, ValueError):
-        raise ValueError('Unable to retrieve Octopus GraphQL metadata') from None
-    if not isinstance(payload, dict) or payload.get('errors') or not isinstance(payload.get('data'), dict):
-        raise ValueError('Unable to retrieve Octopus GraphQL metadata')
-    return payload['data']
-
-def gas_consumption_unit(serial_number):
-    token_data = graphql_request(
+async def gas_consumption_unit(api, serial_number):
+    token_data = await api.graphql_request(
         'mutation ObtainToken($input: ObtainJSONWebTokenInput!) '
         '{ obtainKrakenToken(input: $input) { token } }',
-        {'input': {'APIKey': KEY}},
+        {'input': {'APIKey': api.key}},
     )
     try:
         token = token_data['obtainKrakenToken']['token']
@@ -60,11 +24,11 @@ def gas_consumption_unit(serial_number):
         raise ValueError('Unable to retrieve Octopus GraphQL metadata') from None
     if not isinstance(token, str) or not token:
         raise ValueError('Unable to retrieve Octopus GraphQL metadata')
-    account_data = graphql_request(
+    account_data = await api.graphql_request(
         'query GasConsumptionUnits($accountNumber: String!) '
         '{ account(accountNumber: $accountNumber) '
         '{ properties { gasMeterPoints { meters { serialNumber consumptionUnits } } } } }',
-        {'accountNumber': ACCOUNT},
+        {'accountNumber': api.account},
         token,
     )
     try:
@@ -96,7 +60,7 @@ def agreement_overlaps(agreement, window_start, window_end):
     valid_to = parse_api_datetime(agreement.get('valid_to'))
     return (valid_from is None or valid_from < window_end) and (valid_to is None or window_start < valid_to)
 
-def consumption_measurement(fuel, serial_number=None):
+async def consumption_measurement(api, fuel, serial_number=None):
     if fuel == 'electricity':
         return {
             'value_field': 'consumption',
@@ -106,7 +70,7 @@ def consumption_measurement(fuel, serial_number=None):
             'conversion_applied': False,
         }
     try:
-        unit = gas_consumption_unit(serial_number)
+        unit = await gas_consumption_unit(api, serial_number)
         unit = unit.strip() if isinstance(unit, str) else unit
         unit_status = 'known' if unit else 'unavailable_for_meter'
     except ValueError:
@@ -128,9 +92,8 @@ def consumption_measurement(fuel, serial_number=None):
         'conversion_applied': False,
     }
 
-def meter_inventory(account_data=None, as_of=None):
+def meter_inventory(account_data, as_of=None):
     """Return compatible flat meters plus supply-point selection metadata."""
-    account_data = account() if account_data is None else account_data
     as_of = datetime.now(timezone.utc) if as_of is None else as_of
     meters = []
     supply_points = []
@@ -179,13 +142,15 @@ def meter_inventory(account_data=None, as_of=None):
                     })
     return {'meters': meters, 'supply_points': supply_points, 'as_of': as_of.isoformat()}
 
-def supplies():
-    return meter_inventory()['meters']
+async def inventory_for_account(api):
+    account = await api.get('accounts/' + quote(api.account, safe='') + '/')
+    return meter_inventory(account)
 
 @mcp.tool()
-def list_meters() -> dict:
+async def list_meters() -> dict:
     """List account meters and known tariff agreements; identifies import/export where available."""
-    inventory = meter_inventory()
+    async with upstream_call(KEY, ACCOUNT) as api:
+        inventory = await inventory_for_account(api)
     inventory['note'] = ('A supply point with multiple meter candidates is ambiguous because the account API does not provide '
                          'physical meter validity dates. Do not infer the current meter from the active tariff agreement.')
     return inventory
@@ -249,42 +214,35 @@ def consumption_coverage(records, window_start, window_end):
     }
 
 @mcp.tool()
-def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str, end_date: str) -> dict:
+async def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str, end_date: str) -> dict:
     """Get meter consumption for inclusive UK dates YYYY-MM-DD, up to 31 days. Use list_meters first. Data can be delayed or missing; gas units may be m3."""
     if fuel not in ('electricity', 'gas'):
         raise ValueError('fuel must be electricity or gas')
     start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
     if end < start or (end - start).days > 30:
         raise ValueError('Use an inclusive date range of at most 31 days')
-    supply = next((s for s in supplies() if s['fuel'] == fuel and s['meter_point'] == meter_point and s['serial_number'] == serial_number), None)
-    if supply is None:
-        raise ValueError('Meter does not belong to the configured account')
-    tz = ZoneInfo('Europe/London')
-    begin = datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
-    finish = datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
-    path = f'{fuel}-meter-points/{quote(meter_point, safe="")}/meters/{quote(serial_number, safe="")}/consumption/'
-    # The API default ordering paginates reliably in the observed live case;
-    # order_by=period returned overlapping pages and omitted intervals.
-    params = {'period_from': begin, 'period_to': finish, 'page_size': 250}
-    records = []
-    for _ in range(20):
-        data = get(path, params)
-        records.extend(data.get('results', []))
-        path = data.get('next')
-        if not path:
-            break
-        params = None
-    else:
-        raise ValueError('Too many pages; request a shorter period')
-    # Octopus can return a reading starting at the exclusive period_to boundary.
-    # Filter it out, while preserving legitimate short/long DST days.
-    window_start = datetime.fromisoformat(begin)
-    window_end = datetime.fromisoformat(finish)
-    records = filter_consumption_records(records, window_start, window_end)
-    coverage = consumption_coverage(records, window_start, window_end)
-    applicable_agreements = [agreement for agreement in supply.get('agreements', [])
-                             if agreement_overlaps(agreement, window_start, window_end)]
-    measurement = consumption_measurement(fuel, serial_number)
+    async with upstream_call(KEY, ACCOUNT) as api:
+        inventory = await inventory_for_account(api)
+        supply = next((s for s in inventory['meters'] if s['fuel'] == fuel and s['meter_point'] == meter_point and s['serial_number'] == serial_number), None)
+        if supply is None:
+            raise ValueError('Meter does not belong to the configured account')
+        tz = ZoneInfo('Europe/London')
+        begin = datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
+        finish = datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
+        path = f'{fuel}-meter-points/{quote(meter_point, safe="")}/meters/{quote(serial_number, safe="")}/consumption/'
+        # The API default ordering paginates reliably in the observed live case;
+        # order_by=period returned overlapping pages and omitted intervals.
+        params = {'period_from': begin, 'period_to': finish, 'page_size': 250}
+        records = await api.rows(path, params)
+        # Octopus can return a reading starting at the exclusive period_to boundary.
+        # Filter it out, while preserving legitimate short/long DST days.
+        window_start = datetime.fromisoformat(begin)
+        window_end = datetime.fromisoformat(finish)
+        records = filter_consumption_records(records, window_start, window_end)
+        coverage = consumption_coverage(records, window_start, window_end)
+        applicable_agreements = [agreement for agreement in supply.get('agreements', [])
+                                 if agreement_overlaps(agreement, window_start, window_end)]
+        measurement = await consumption_measurement(api, fuel, serial_number)
     if fuel == 'electricity':
         unit_note = 'Consumption values are kWh.'
     elif measurement['unit']:
@@ -294,32 +252,19 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
     return {'fuel': fuel, 'start_date': start_date, 'end_date_inclusive': end_date, 'records': records, 'record_count': len(records), 'coverage': coverage, 'measurement': measurement, 'applicable_agreements': applicable_agreements, 'unit_note': unit_note, 'coverage_note': 'Missing or delayed intervals are not zero; dates converted from Europe/London. Returned intervals are sorted and restricted to the requested date window.'}
 
 @mcp.tool()
-def tariff_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
+async def tariff_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
     """Fetch standard unit rates and standing charges for a product and tariff, inclusive UK dates, up to 31 days. Economy 7 or special tariff rates may require other endpoints."""
     if fuel not in ('electricity', 'gas'):
         raise ValueError('fuel must be electricity or gas')
-    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
-    if end < start or (end-start).days > 30:
-        raise ValueError('Use at most 31 inclusive days')
-    tz = ZoneInfo('Europe/London')
-    params = {'period_from': datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat(), 'period_to': datetime.combine(end+timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat(), 'page_size': 250}
+    period = tariff_rate_period(start_date, end_date)
     base = f'products/{quote(product_code, safe="")}/{fuel}-tariffs/{quote(tariff_code, safe="")}/'
-    result = {}
-    for kind in ('standard-unit-rates', 'standing-charges'):
-        path, query, rows = base + kind + '/', params, []
-        for _ in range(20):
-            page = get(path, query)
-            rows.extend(page.get('results', []))
-            path, query = page.get('next'), None
-            if not path:
-                break
-        else:
-            raise ValueError('Too many tariff pages; request a shorter period')
-        result[kind] = rows
+    async with upstream_call(KEY, ACCOUNT) as api:
+        result = {kind: await api.rows(base + kind + '/', {**period, 'page_size': 250})
+                  for kind in ('standard-unit-rates', 'standing-charges')}
     return {'rates': result, 'note': 'Rates are in pence; use VAT-inclusive values. Standard rates may not capture EV dispatch, export, dual-rate, discounts or actual bills.'}
 
 @mcp.tool()
-def tariff_products(available_at: str) -> dict:
+async def tariff_products(available_at: str) -> dict:
     """List Octopus products available at an aware ISO timestamp. Availability is not household eligibility."""
     try:
         instant = datetime.fromisoformat(available_at.replace('Z', '+00:00'))
@@ -327,30 +272,19 @@ def tariff_products(available_at: str) -> dict:
             raise ValueError
     except (ValueError, TypeError, AttributeError):
         raise ValueError('available_at must be an ISO timestamp with a timezone') from None
-    path, params, products = 'products/', {'available_at': instant.astimezone(timezone.utc).isoformat(), 'page_size': 100}, []
-    seen = set()
-    for _ in range(20):
-        page = get(path, params)
-        if not isinstance(page, dict) or not isinstance(page.get('results'), list):
-            raise ValueError('Invalid product catalogue response')
-        products.extend(page['results'])
-        path, params = page.get('next'), None
-        if not path:
-            break
-        if not isinstance(path, str) or path in seen:
-            raise ValueError('Invalid product catalogue pagination')
-        seen.add(path)
-    else:
-        raise ValueError('Too many product pages')
+    params = {'available_at': instant.astimezone(timezone.utc).isoformat(), 'page_size': 100}
+    async with upstream_call(KEY, ACCOUNT) as api:
+        products = await api.rows('products/', params)
     return {'available_at': instant.astimezone(timezone.utc).isoformat(), 'products': products,
             'eligibility': 'unknown', 'note': 'Published availability does not establish household eligibility. Check region, meter, payment method, export and product-specific requirements.'}
 
 @mcp.tool()
-def tariff_product(product_code: str) -> dict:
+async def tariff_product(product_code: str) -> dict:
     """Retrieve a product and its regional tariff variants; eligibility is not established."""
     if not isinstance(product_code, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', product_code):
         raise ValueError('Invalid product code')
-    product = get(f'products/{product_code}/')
+    async with upstream_call(KEY, ACCOUNT) as api:
+        product = await api.get(f'products/{product_code}/')
     if not isinstance(product, dict):
         raise ValueError('Invalid product response')
     return {'product': product, 'eligibility': 'unknown',
@@ -372,35 +306,20 @@ def tariff_rate_period(start_date, end_date):
         'period_to': datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
     }
 
-def tariff_rate_rows(path, period):
-    query = {**period, 'page_size': 250}
-    rows, seen = [], set()
-    for _ in range(20):
-        page = get(path, query)
-        if not isinstance(page, dict) or not isinstance(page.get('results'), list):
-            raise ValueError('Invalid tariff rate response')
-        rows.extend(page['results'])
-        path, query = page.get('next'), None
-        if not path:
-            return rows
-        if not isinstance(path, str) or path in seen:
-            raise ValueError('Invalid tariff rate pagination')
-        seen.add(path)
-    raise ValueError('Too many tariff pages; request a shorter period')
-
 @mcp.tool()
-def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
+async def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
     """Fetch published day and night unit rates for a dual-register tariff, for up to 31 UK dates."""
     base = electricity_tariff_path(product_code, tariff_code)
     if fuel != 'electricity':
         raise ValueError('Dual-register rates are supported for electricity only')
     period = tariff_rate_period(start_date, end_date)
     kinds = ('day-unit-rates', 'night-unit-rates', 'standing-charges')
-    rates = {kind: tariff_rate_rows(base + kind + '/', period) for kind in kinds}
+    async with upstream_call(KEY, ACCOUNT) as api:
+        rates = {kind: await api.rows(base + kind + '/', {**period, 'page_size': 250}) for kind in kinds}
     return {'rates': rates, 'note': 'Rates are pence; use VAT-inclusive values. Day/night switching times and meter register allocation must be verified separately. These rates are not a bill or a cost comparison.'}
 
 @mcp.tool()
-def tariff_ev_rates(product_code: str, tariff_code: str, start_date: str, end_date: str) -> dict:
+async def tariff_ev_rates(product_code: str, tariff_code: str, start_date: str, end_date: str) -> dict:
     """Fetch published rates for a four-rate EV electricity tariff for up to 31 inclusive UK dates.
 
     Use tariff_product to find codes under four_rate_ev_electricity_tariffs.
@@ -411,7 +330,8 @@ def tariff_ev_rates(product_code: str, tariff_code: str, start_date: str, end_da
     kinds = ('day-unit-rates', 'night-unit-rates', 'ev-device-peak-unit-rates',
              'ev-device-off-peak-unit-rates', 'standing-charges')
     paths = {kind: base + kind + '/' for kind in kinds}
-    rates = {kind: tariff_rate_rows(path, period) for kind, path in paths.items()}
+    async with upstream_call(KEY, ACCOUNT) as api:
+        rates = {kind: await api.rows(path, {**period, 'page_size': 250}) for kind, path in paths.items()}
     return {
         'product_code': product_code,
         'tariff_code': tariff_code,

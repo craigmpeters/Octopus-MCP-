@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import pytest
 import server
+from upstream import Upstream
 
 
 def interval(start):
@@ -11,15 +12,16 @@ def interval(start):
 
 
 @pytest.mark.parametrize(('day', 'count'), [('2025-03-30', 46), ('2025-10-26', 50), ('2025-02-01', 48)])
-def test_uk_day_and_pagination(day, count):
+@pytest.mark.anyio
+async def test_uk_day_and_pagination(day, count):
     local = datetime.combine(date.fromisoformat(day), time.min, ZoneInfo('Europe/London'))
     start = local.astimezone(timezone.utc)
     records = [interval(start + timedelta(minutes=30 * n)) for n in range(count)]
     pages = [{'results': list(reversed(records[20:])), 'next': 'https://api.octopus.energy/v1/next'},
              {'results': records[:20] + [interval(start + timedelta(minutes=30 * count))], 'next': None}]
     supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc', 'agreements': []}]
-    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=pages) as get:
-        result = server.consumption('electricity', '123', 'abc', day, day)
+    with patch.object(server, 'inventory_for_account', return_value={'meters': supply}), patch.object(Upstream, 'get', side_effect=pages) as get:
+        result = await server.consumption('electricity', '123', 'abc', day, day)
     assert result['records'] == records
     assert result['record_count'] == count
     assert result['coverage'] == {
@@ -53,12 +55,14 @@ def test_invalid_interval_rejected():
         server.filter_consumption_records([{'interval_start': 'bad'}], start, start + timedelta(days=1))
 
 
-def test_unowned_meter_rejected():
-    with patch.object(server, 'supplies', return_value=[]), pytest.raises(ValueError, match='belong'):
-        server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
+@pytest.mark.anyio
+async def test_unowned_meter_rejected():
+    with patch.object(server, 'inventory_for_account', return_value={'meters': []}), pytest.raises(ValueError, match='belong'):
+        await server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
 
 
-def test_gas_unit_and_agreements_overlap_window():
+@pytest.mark.anyio
+async def test_gas_unit_and_agreements_overlap_window():
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     records = [interval(start + timedelta(minutes=30 * n)) for n in range(48)]
     supply = [{
@@ -70,10 +74,10 @@ def test_gas_unit_and_agreements_overlap_window():
             {'tariff_code': 'DURING', 'valid_from': '2025-01-01T00:00:00Z', 'valid_to': None},
         ],
     }]
-    with patch.object(server, 'supplies', return_value=supply), \
-            patch.object(server, 'get', return_value={'results': records, 'next': None}), \
+    with patch.object(server, 'inventory_for_account', return_value={'meters': supply}), \
+            patch.object(Upstream, 'get', return_value={'results': records, 'next': None}), \
             patch.object(server, 'gas_consumption_unit', return_value='m³'):
-        result = server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
+        result = await server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
     assert result['measurement'] == {
         'value_field': 'consumption',
         'quantity': 'volume',
@@ -86,9 +90,10 @@ def test_gas_unit_and_agreements_overlap_window():
     assert 'reported by Octopus in m³' in result['unit_note']
 
 
-def test_gas_unit_lookup_failure_is_explicit():
+@pytest.mark.anyio
+async def test_gas_unit_lookup_failure_is_explicit():
     with patch.object(server, 'gas_consumption_unit', side_effect=ValueError):
-        measurement = server.consumption_measurement('gas', 'abc')
+        measurement = await server.consumption_measurement(None, 'gas', 'abc')
     assert measurement == {
         'value_field': 'consumption',
         'quantity': 'volume_or_energy',
@@ -99,7 +104,8 @@ def test_gas_unit_lookup_failure_is_explicit():
     }
 
 
-def test_graphql_gas_unit_matches_selected_meter():
+@pytest.mark.anyio
+async def test_graphql_gas_unit_matches_selected_meter():
     responses = [
         {'obtainKrakenToken': {'token': 'token'}},
         {'account': {'properties': [{'gasMeterPoints': [{'meters': [
@@ -107,10 +113,10 @@ def test_graphql_gas_unit_matches_selected_meter():
             {'serialNumber': 'current', 'consumptionUnits': 'm³'},
         ]}]}]}},
     ]
-    with patch.object(server, 'graphql_request', side_effect=responses) as request:
-        assert server.gas_consumption_unit('current') == 'm³'
+    with patch.object(Upstream, 'graphql_request', side_effect=responses) as request:
+        assert await server.gas_consumption_unit(Upstream(None, 'key', 'account'), 'current') == 'm³'
     assert request.call_count == 2
-    assert request.call_args_list[1].args[1] == {'accountNumber': server.ACCOUNT}
+    assert request.call_args_list[1].args[1] == {'accountNumber': 'account'}
     assert request.call_args_list[1].args[2] == 'token'
 
 
@@ -135,15 +141,16 @@ def test_coverage_rejects_non_half_hour_interval():
         server.consumption_coverage([record], start, start + timedelta(days=1))
 
 
-def test_default_order_pagination_filters_boundary_and_sorts():
+@pytest.mark.anyio
+async def test_default_order_pagination_filters_boundary_and_sorts():
     start = datetime(2026, 11, 8, tzinfo=timezone.utc)
     records = [interval(start + timedelta(minutes=30 * n)) for n in range(337)]
     descending = list(reversed(records))
     pages = [{'results': descending[:250], 'next': 'https://api.octopus.energy/v1/next?page=2'},
              {'results': descending[250:], 'next': None}]
     supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc', 'agreements': []}]
-    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=pages) as get:
-        result = server.consumption('electricity', '123', 'abc', '2026-11-08', '2026-11-14')
+    with patch.object(server, 'inventory_for_account', return_value={'meters': supply}), patch.object(Upstream, 'get', side_effect=pages) as get:
+        result = await server.consumption('electricity', '123', 'abc', '2026-11-08', '2026-11-14')
     assert get.call_count == 2
     assert 'order_by' not in get.call_args_list[0].args[1]
     assert get.call_args_list[1].args == ('https://api.octopus.energy/v1/next?page=2', None)
