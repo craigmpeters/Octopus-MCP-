@@ -1,6 +1,6 @@
 services:
   octopus-mcp:
-    build: .
+    image: ghcr.io/craigmpeters/octopus-mcp:latest
     restart: unless-stopped
     env_file: .env
     ports:
