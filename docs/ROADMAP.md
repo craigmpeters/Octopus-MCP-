@@ -68,3 +68,5 @@ Do not mark a phase complete because code was drafted. Require code review, pass
 ### Live validation note (2026-11-17)
 
 Single-day import, export and gas requests returned 48 intervals on a normal day and 50 on the autumn clock-change day. A seven-day request failed duplicate detection for all three. Daily requests are used as a workaround pending validation of the updated deployment; the cause of the multi-day pagination failure is not yet established. This increases API requests for longer ranges. Do not treat these checks as full live validation.
+
+A subsequent seven-day electricity API diagnostic found 64 overlapping intervals with `order_by=period` and none with the default ordering. The implementation now uses default ordering and sorts locally; live validation of the revised implementation remains outstanding. This observation does not establish the API’s underlying cause or guarantee completeness.
