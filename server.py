@@ -31,19 +31,83 @@ def get(path, params=None):
 def account():
     return get('accounts/' + quote(ACCOUNT, safe='') + '/')
 
-def supplies():
-    out = []
-    for prop in account().get('properties', []):
+def parse_api_datetime(value):
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError('Invalid agreement timestamp in Octopus account response') from None
+    if parsed.tzinfo is None:
+        raise ValueError('Invalid agreement timestamp in Octopus account response')
+    return parsed
+
+def agreement_is_active(agreement, as_of):
+    valid_from = parse_api_datetime(agreement.get('valid_from'))
+    valid_to = parse_api_datetime(agreement.get('valid_to'))
+    return (valid_from is None or valid_from <= as_of) and (valid_to is None or as_of < valid_to)
+
+def meter_inventory(account_data=None, as_of=None):
+    """Return compatible flat meters plus supply-point selection metadata."""
+    account_data = account() if account_data is None else account_data
+    as_of = datetime.now(timezone.utc) if as_of is None else as_of
+    meters = []
+    supply_points = []
+    for prop in account_data.get('properties', []):
         for fuel, key, identifier in [('electricity', 'electricity_meter_points', 'mpan'), ('gas', 'gas_meter_points', 'mprn')]:
             for point in prop.get(key, []):
-                for meter in point.get('meters', []):
-                    out.append({'fuel': fuel, 'meter_point': str(point.get(identifier, '')), 'serial_number': meter.get('serial_number'), 'agreements': point.get('agreements', []), 'is_export': point.get('is_export', False)})
-    return out
+                is_export = bool(point.get('is_export', False))
+                direction = 'export' if is_export else ('import' if fuel == 'electricity' else 'consumption')
+                agreements = point.get('agreements', [])
+                active_agreements = [agreement for agreement in agreements if agreement_is_active(agreement, as_of)]
+                candidates = [meter.get('serial_number') for meter in point.get('meters', []) if meter.get('serial_number')]
+                if len(candidates) == 1:
+                    meter_selection_status = 'unambiguous'
+                elif candidates:
+                    meter_selection_status = 'ambiguous'
+                else:
+                    meter_selection_status = 'unavailable'
+                if len(active_agreements) == 1:
+                    agreement_selection_status = 'unambiguous'
+                elif active_agreements:
+                    agreement_selection_status = 'ambiguous'
+                else:
+                    agreement_selection_status = 'unavailable'
+                meter_point = str(point.get(identifier, ''))
+                supply_points.append({
+                    'fuel': fuel,
+                    'direction': direction,
+                    'meter_point': meter_point,
+                    'meter_candidates': candidates,
+                    'meter_selection_status': meter_selection_status,
+                    'meter_validity_known': False,
+                    'agreements': agreements,
+                    'active_agreements': active_agreements,
+                    'agreement_selection_status': agreement_selection_status,
+                })
+                for serial_number in candidates:
+                    meters.append({
+                        'fuel': fuel,
+                        'meter_point': meter_point,
+                        'serial_number': serial_number,
+                        'agreements': agreements,
+                        'is_export': is_export,
+                        'direction': direction,
+                        'meter_selection_status': meter_selection_status,
+                        'active_agreements': active_agreements,
+                    })
+    return {'meters': meters, 'supply_points': supply_points, 'as_of': as_of.isoformat()}
+
+def supplies():
+    return meter_inventory()['meters']
 
 @mcp.tool()
 def list_meters() -> dict:
     """List account meters and known tariff agreements; identifies import/export where available."""
-    return {'meters': supplies(), 'note': 'Account history can include old meters and tariffs. Select the relevant meter and dates.'}
+    inventory = meter_inventory()
+    inventory['note'] = ('A supply point with multiple meter candidates is ambiguous because the account API does not provide '
+                         'physical meter validity dates. Do not infer the current meter from the active tariff agreement.')
+    return inventory
 
 def filter_consumption_records(records, window_start, window_end):
     """Keep intervals fully inside [start, end), in chronological order."""

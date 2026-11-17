@@ -27,7 +27,7 @@ In ChatGPT on the web: Plugins > + > Add custom MCP server > Connection: Tunnel,
 - "Compare my electricity use this week so far against the same days last week."
 - "Find the standard unit rates and standing charge for my tariff for the last week."
 
-Choose the current import meter, not an old or export meter. Meter data can be late or incomplete. Data uses London calendar dates, including daylight saving transitions. Gas readings may be in m³ rather than kWh. Standard tariff rates do not fully model Intelligent Octopus dispatch or other special rates: costs are estimates, not bills. The API does not identify separate car consumption from the household meter. This version does not retrieve EV dispatch slots or real-time usage.
+Use the supply-point direction and meter-selection status returned by `list_meters`. If a supply point has multiple meter candidates, the account API does not provide enough physical meter validity data to identify the current one safely. Meter data can be late or incomplete. Data uses London calendar dates, including daylight saving transitions. Gas readings may be in m³ rather than kWh. Standard tariff rates do not fully model Intelligent Octopus dispatch or other special rates: costs are estimates, not bills. The API does not identify separate car consumption from the household meter. This version does not retrieve EV dispatch slots or real-time usage.
 
 ## Container publishing
 
