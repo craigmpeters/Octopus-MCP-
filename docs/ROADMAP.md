@@ -23,13 +23,15 @@ This roadmap is prioritized, not a claim of completed features. Each phase shoul
 Live sampling across both ambiguous import and gas candidates found complete readings on one candidate for selected 2025–2026 dates, but no readings on either candidate for selected 2023–2024 dates. Consumption availability therefore does not establish historical installation dates and must not be used to label a candidate as the current physical meter.
 
 ## Phase 2 — PR #3: Tariff discovery and comparison
-**Priority:** High. **Status:** Planned.
+**Priority:** High. **Status:** Started; catalogue discovery implemented, comparison planned.
 
 - Retrieve products, regional tariff variants, account agreements and relevant rate structures.
 - Distinguish tariff existence from household eligibility; identify missing eligibility information.
 - Build interval-level deterministic cost replay: import + standing charges - export earnings; gas separate.
 - Include VAT, day/night and time-of-use rates, plus supported special EV dispatch adjustments.
 - **Done when:** historical tariff comparison produces auditable results with coverage, assumptions and limitations; no unsupported claim of actual billed cost.
+
+The first slice adds `tariff_products` and `tariff_product` for published catalogue discovery and regional variants, and `tariff_dual_rates` for day/night rates and standing charges. Eligibility remains unknown; register switching times, rate normalization, replay, EV adjustments and live validation remain outstanding.
 
 ## Phase 3 — PR #4: Solar and EV insights
 **Priority:** High. **Status:** Planned.
