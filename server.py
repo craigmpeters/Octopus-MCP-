@@ -65,6 +65,44 @@ def filter_consumption_records(records, window_start, window_end):
             filtered.append(record)
     return sorted(filtered, key=lambda record: datetime.fromisoformat(record['interval_start'].replace('Z', '+00:00')))
 
+def consumption_coverage(records, window_start, window_end):
+    """Describe half-hour coverage for a UTC window without treating gaps as zero."""
+    interval = timedelta(minutes=30)
+    expected = set()
+    cursor = window_start
+    while cursor < window_end:
+        expected.add((cursor, cursor + interval))
+        cursor += interval
+
+    observed = set()
+    for record in records:
+        start = datetime.fromisoformat(record['interval_start'].replace('Z', '+00:00'))
+        end = datetime.fromisoformat(record['interval_end'].replace('Z', '+00:00'))
+        if end - start != interval or (start - window_start) % interval:
+            raise ValueError('Unexpected consumption interval; expected aligned half-hour readings')
+        observed.add((start, end))
+
+    missing = sorted(expected - observed)
+    gaps = []
+    for start, end in missing:
+        if gaps and datetime.fromisoformat(gaps[-1]['interval_end'].replace('Z', '+00:00')) == start:
+            gaps[-1]['interval_end'] = end.isoformat()
+            gaps[-1]['missing_interval_count'] += 1
+        else:
+            gaps.append({
+                'interval_start': start.isoformat(),
+                'interval_end': end.isoformat(),
+                'missing_interval_count': 1,
+            })
+    return {
+        'interval_minutes': 30,
+        'expected_interval_count': len(expected),
+        'returned_interval_count': len(observed),
+        'missing_interval_count': len(missing),
+        'complete': not missing,
+        'gaps': gaps,
+    }
+
 @mcp.tool()
 def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str, end_date: str) -> dict:
     """Get meter consumption for inclusive UK dates YYYY-MM-DD, up to 31 days. Use list_meters first. Data can be delayed or missing; gas units may be m3."""
@@ -97,7 +135,8 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
     window_start = datetime.fromisoformat(begin)
     window_end = datetime.fromisoformat(finish)
     records = filter_consumption_records(records, window_start, window_end)
-    return {'fuel': fuel, 'start_date': start_date, 'end_date_inclusive': end_date, 'records': records, 'record_count': len(records), 'unit_note': 'Electricity kWh; gas may be m³ or kWh depending on meter. Confirm before calculating cost.', 'coverage_note': 'Missing or delayed intervals are not zero; dates converted from Europe/London. Returned intervals are sorted and restricted to the requested date window.'}
+    coverage = consumption_coverage(records, window_start, window_end)
+    return {'fuel': fuel, 'start_date': start_date, 'end_date_inclusive': end_date, 'records': records, 'record_count': len(records), 'coverage': coverage, 'unit_note': 'Electricity kWh; gas may be m³ or kWh depending on meter. Confirm before calculating cost.', 'coverage_note': 'Missing or delayed intervals are not zero; dates converted from Europe/London. Returned intervals are sorted and restricted to the requested date window.'}
 
 @mcp.tool()
 def tariff_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
