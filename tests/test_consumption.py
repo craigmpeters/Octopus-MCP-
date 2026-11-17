@@ -41,3 +41,18 @@ def test_invalid_interval_rejected():
 def test_unowned_meter_rejected():
     with patch.object(server, 'supplies', return_value=[]), pytest.raises(ValueError, match='belong'):
         server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
+
+
+def test_multiple_days_are_requested_separately_and_boundary_is_filtered():
+    start = datetime(2026, 11, 8, tzinfo=timezone.utc)
+    supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc'}]
+    def get_day(path, params):
+        day_start = datetime.fromisoformat(params['period_from'])
+        assert datetime.fromisoformat(params['period_to']) - day_start == timedelta(days=1)
+        return {'results': [interval(day_start + timedelta(minutes=30 * n)) for n in range(49)], 'next': None}
+    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=get_day) as get:
+        result = server.consumption('electricity', '123', 'abc', '2026-11-08', '2026-11-14')
+    assert get.call_count == 7
+    assert result['record_count'] == 336
+    assert result['records'][0] == interval(start)
+    assert result['records'][-1] == interval(start + timedelta(minutes=30 * 335))

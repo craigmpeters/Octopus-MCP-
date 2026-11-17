@@ -64,3 +64,7 @@ This roadmap is prioritized, not a claim of completed features. Each phase shoul
 ## Rules for claiming completion
 
 Do not mark a phase complete because code was drafted. Require code review, passing CI, clear documentation, and (where relevant) live read-only verification with real data. Do not commit live API responses or private household identifiers.
+
+### Live validation note (2026-11-17)
+
+Single-day import, export and gas requests returned 48 intervals on a normal day and 50 on the autumn clock-change day. A seven-day request failed duplicate detection for all three. Daily requests are used as a workaround pending validation of the updated deployment; the cause of the multi-day pagination failure is not yet established. This increases API requests for longer ranges. Do not treat these checks as full live validation.
