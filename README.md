@@ -4,13 +4,13 @@ A personal, read-only MCP server: list meters and tariff agreements, fetch elect
 
 ## 1. Set up on your Docker host
 
-Copy `compose.yaml` from this repository to a private directory on your Docker host, then open a terminal there. The Compose file pulls `ghcr.io/craigmpeters/octopus-mcp:latest` (linux/amd64), so you do not need the source code or a local build. On OpenMediaVault, use the Compose plugin and enter the account settings directly in its Compose configuration.
+Use the repository's `compose.yaml` as a template. On OpenMediaVault, create or edit the stack in **Services → Compose → Files**. On other Docker hosts, copy the file to a private directory. The Compose file pulls `ghcr.io/craigmpeters/octopus-mcp:latest` (linux/amd64), so you do not need the source code or a local build.
 
 The GitHub Actions workflow builds the image on pull requests and publishes it on pushes to `main`. The image will only exist after the first successful publish. New GitHub Container Registry packages may be private: if it is private, make the package public in GitHub Packages settings, or authenticate on the Docker host with `docker login ghcr.io` using a personal access token with `read:packages`. Do not put the token in the Compose file.
 
 1. Edit the `environment` section in your local Compose file and replace the example account number and API key with your own. Octopus provides keys under its account dashboard's Developer settings: https://octopus.energy/help-and-faqs/articles/how-do-i-access-the-octopus-api/ . Keep the configured file private (for example, `chmod 600 compose.yaml`), never commit it to GitHub or paste your key into ChatGPT. Docker administrators can inspect container environment variables.
-2. Run `docker compose pull` followed by `docker compose up -d`. To update later, run the same two commands.
-3. `docker compose logs --tail=30` should show startup. The endpoint is `http://127.0.0.1:8765/mcp` on that host. The port is bound to loopback only.
+2. In the OMV Compose **Files** tab, select the stack and click **Pull**, then **Up**. From a Docker terminal, the equivalents are `docker compose pull` and `docker compose up -d`.
+3. Check startup in **Services → Compose → Containers → Logs** or with `docker compose logs --tail=30`. With the repository's port mapping, the endpoint is `http://127.0.0.1:8765/mcp` on the Docker host. The port is bound to loopback only.
 
 ## 2. Connect securely to ChatGPT
 
@@ -34,10 +34,23 @@ In ChatGPT on the web: Plugins > + > Add custom MCP server > Connection: Tunnel,
 
 Use the supply-point direction and meter-selection status returned by `list_meters`. If a supply point has multiple meter candidates, the account API does not provide enough physical meter validity data to identify the current one safely. Meter data can be late or incomplete. Data uses London calendar dates, including daylight saving transitions. Consumption responses identify agreements overlapping the requested dates. Electricity consumption is reported in kWh. Gas units are resolved for the selected meter using Kraken GraphQL `consumptionUnits`; SMETS1 data is documented as kWh and SMETS2 as m³. If the unit lookup fails or omits a historical meter, the unit remains explicitly unknown. No gas conversion is applied. Standard tariff rates do not fully model Intelligent Octopus dispatch or other special rates: costs are estimates, not bills. The API does not identify separate car consumption from the household meter. This version does not retrieve EV dispatch slots or real-time usage.
 
+## Deploy and refresh new MCP tools
+
+When a release adds or changes tools, update the running server, then refresh the tool list in ChatGPT.
+
+1. After the PR is merged, wait for **Build and publish container** to succeed on `main` in GitHub Actions. The workflow builds on pull requests and publishes on pushes to `main`. Each published image has a `latest` tag and a tag for its Git commit. If your OMV stack uses a pinned tag, edit its `image:` line to use the new commit tag before pulling.
+2. In **OMV → Services → Compose → Files**, select the Octopus MCP stack. Click **Pull**, then **Up**. Compose recreates the container when the image changes, so there is no need to take the stack down first.
+3. In **ChatGPT on the web → Plugins**, open the existing Octopus Energy connection and click **Refresh** to load its updated tool list. [OpenAI's refresh instructions](https://developers.openai.com/apps-sdk/deploy/connect-chatgpt#refresh-metadata)
+4. Start a new conversation, select Octopus Energy with `@`, and ask it to call a newly added tool. For tariff discovery, try “Use `tariff_products` to list products available at `2026-11-17T00:00:00Z`.” A successful call to an older tool confirms connectivity only.
+
+If a new tool is missing, open **OMV → Services → Compose → Containers**, select the running Octopus MCP container, and click **Inspect**. Compare its top-level `Image` field to the `Id` shown under **Services → Compose → Images → Inspect** for the repository and tag you just pulled. The registry manifest digest and the Docker image ID are different identifiers. Share only the `Image` field if you need help, since the full container Inspect output can contain credentials.
+
+If the image ID matches, use **Logs** on that same container while making a read-only request from ChatGPT. For example, request standard rates for public tariff `E-1R-AGILE-24-10-01-A` on a specific date, then look for the matching tariff code and date near the bottom of the logs. A matching request confirms the tunnel reaches that container. If the new tool still does not appear, check the ChatGPT connection's refresh and the tool list in a new conversation. If the request is missing from the container's logs, check the tunnel target and its `/mcp` path.
+
 ## Container publishing
 
 The workflow also tags each published image with its Git commit SHA. For reproducible deployments, replace `latest` in `compose.yaml` with the desired commit SHA. Publishing uses the repository's `GITHUB_TOKEN` and `packages: write` permission; check the Actions run if publishing fails. The image is currently built for linux/amd64, suitable for the Dell PowerEdge R230.
 
 ## Status
 
-The code was checked locally using mocked API responses; it has not been tested with your Octopus account, Docker installation, or a ChatGPT tunnel. Account response shapes and API behaviour can vary; if a tool fails, share the error with account identifiers and secrets removed. To stop: `docker compose down`. To revoke a leaked key use your Octopus developer settings.
+After the Phase 2 deployment on OpenMediaVault and a ChatGPT connection refresh, all three discovery tools passed a live test through the Secure MCP Tunnel. The checks covered the published product list, regional tariff variants, and day and night rates and standing charges for a sample dual-register tariff. If a tool fails, share the error with account identifiers and secrets removed. To revoke a leaked key, use your Octopus developer settings.
