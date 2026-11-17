@@ -23,7 +23,7 @@ Build a personal, read-only-first Octopus Energy MCP service that helps answer:
 
 ## Existing baseline (as reviewed 2026-11-17)
 
-- Python FastMCP server in `server.py` with `list_meters`, `consumption`, and `tariff_rates`.
+- Python FastMCP server in `server.py` with `list_meters`, `consumption`, `tariff_rates`, `tariff_products`, `tariff_product`, and `tariff_dual_rates`.
 - Octopus REST API via `httpx`; electricity import/export and gas meters can appear in account discovery.
 - `consumption` accepts a selected meter point and serial number and fetches up to 31 inclusive UK calendar dates.
 - `tariff_rates` currently reads standard unit rates and standing charges only; it is **not** a complete tariff comparison engine.
@@ -39,6 +39,7 @@ Build a personal, read-only-first Octopus Energy MCP service that helps answer:
 4. Use mocked fixtures for CI, then perform separate privacy-conscious live read-only validation.
 5. Update these docs when architecture, assumptions, security posture or roadmap change.
 6. Label estimates, missing data and unsupported tariff features clearly; never invent prices or device readings.
+7. For new or changed MCP tools, follow the [OMV deployment and ChatGPT refresh steps](../README.md#deploy-and-refresh-new-mcp-tools) and verify a call to a new or changed tool.
 
 ## Important distinctions
 
