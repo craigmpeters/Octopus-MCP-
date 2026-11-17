@@ -12,10 +12,10 @@ Use versioned documentation in `docs/` to carry vision, decisions and roadmap be
 
 Keep the MCP service private behind the Secure MCP Tunnel, not publicly exposed without proper authentication. Read-only account, meter, tariff and telemetry access is the default. Device control is out of scope until separately designed and explicitly approved.
 
-## ADR-003 — Deterministic analysis, not ad hoc LLM arithmetic
-**Status:** Accepted (2026-11-17)
+## ADR-003 — MCP provides data for client-side analysis
+**Status:** Accepted (2026-11-17). Replaces the earlier decision to put pricing and simulation in the MCP service.
 
-Perform pricing, time-series alignment, tariff comparison and battery simulations in tested Python domain code. Use ChatGPT for interpretation and natural-language interaction. Show inputs, assumptions and uncertainty.
+Expose source readings, tariff agreements, published rates and applicable time windows through MCP. Preserve provenance, units, VAT basis, validity dates and data gaps. The server can validate and normalize records for reuse. ChatGPT, Jupyter or another client can combine the inputs for pricing, comparison and simulations, with the calculation assumptions made explicit.
 
 ## ADR-004 — Octopus is billing data; Home Assistant is optional telemetry
 **Status:** Accepted (2026-11-17)
@@ -30,12 +30,12 @@ Treat electricity import, electricity export and gas independently. Preserve phy
 ## ADR-006 — Honest tariff comparison and eligibility
 **Status:** Accepted (2026-11-17)
 
-Compare only tariffs that can be supported by rate and eligibility data. Separate historical replay from future forecasts. Account for standing charges, VAT, export, regional variation and special EV dispatch adjustments where verified. Clearly mark incomplete estimates.
+Expose eligibility evidence separately from published rates. Client comparisons should distinguish historical replay from forecasts, account for standing charges, VAT, export, regional variation and verified EV adjustments, and label incomplete estimates.
 
 ## ADR-007 — Small PRs, CI and controlled releases
 **Status:** Accepted (2026-11-17)
 
-Keep compatibility with existing MCP tools where practical. Add automated tests and CI checks before shipping pricing logic. PR creation is not authorization to merge, publish a production image or deploy to OpenMediaVault.
+Keep compatibility with existing MCP tools where practical. Add automated tests and CI checks for data retrieval and validation. PR creation is not authorization to merge, publish a production image or deploy to OpenMediaVault.
 
 ## ADR-008 — Battery is simulated before integrated
 **Status:** Accepted (2026-11-17)

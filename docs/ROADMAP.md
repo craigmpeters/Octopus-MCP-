@@ -22,33 +22,33 @@ This roadmap is prioritized, not a claim of completed features. Each phase shoul
 
 Live sampling across both ambiguous import and gas candidates found complete readings on one candidate for selected 2025–2026 dates, but no readings on either candidate for selected 2023–2024 dates. Consumption availability therefore does not establish historical installation dates and must not be used to label a candidate as the current physical meter.
 
-## Phase 2 — PR #3: Tariff discovery and comparison
-**Priority:** High. **Status:** Started; catalogue discovery implemented, comparison planned.
+## Phase 2 — Tariff data for comparison
+**Priority:** High. **Status:** In progress. Catalogue discovery and published dual-register rates passed live checks through MCP.
 
 - Retrieve products, regional tariff variants, account agreements and relevant rate structures.
 - Distinguish tariff existence from household eligibility; identify missing eligibility information.
-- Build interval-level deterministic cost replay: import + standing charges - export earnings; gas separate.
-- Include VAT, day/night and time-of-use rates, plus supported special EV dispatch adjustments.
-- **Done when:** historical tariff comparison produces auditable results with coverage, assumptions and limitations; no unsupported claim of actual billed cost.
+- Expose VAT basis, day/night and time-of-use rates, and verified EV dispatch data with their sources and time bounds.
+- **Done when:** clients can retrieve the usage, price and applicability data needed for an auditable comparison with gaps and limitations visible. Clients calculate costs and savings.
 
-The first slice adds `tariff_products` and `tariff_product` for published catalogue discovery and regional variants, and `tariff_dual_rates` for day/night rates and standing charges. Eligibility remains unknown; register switching times, rate normalization, replay, EV adjustments and live validation remain outstanding.
+`tariff_products` and `tariff_product` expose published catalogue discovery and regional variants. `tariff_dual_rates` exposes day/night rates and standing charges. For products listed under `four_rate_ev_electricity_tariffs`, `tariff_ev_rates` retrieves separate household and EV rate bands from the published endpoints. A current four-rate Intelligent Octopus product returned those bands even though its standard endpoint returned no unit rates. Household eligibility, switching schedules, and account-specific EV dispatch applicability still require separate evidence.
+
+Kraken's GraphQL schema exposes `applicableRates` with account, meter point and time-range inputs. Verify access and what its returned intervals represent on an authenticated account before offering them through MCP.
 
 ## Phase 3 — PR #4: Solar and EV insights
 **Priority:** High. **Status:** Planned.
 
-- Report import/export separately, and calculate export revenue from verified rates.
+- Provide separate import and export readings and verified export rates for client calculations.
 - Add optional read-only Home Assistant adapter with explicit entity mapping and protected credentials.
 - Use solar generation telemetry to estimate self-consumption; reconcile sampling intervals and energy units.
 - Add EV charging energy from verified charger telemetry and Octopus device/dispatch data where officially supported.
 - **Done when:** solar and EV cost analyses distinguish measured values from inferred/estimated values.
 
-## Phase 4 — PR #5: Battery simulation
+## Phase 4 — Data for client-side battery simulation
 **Priority:** Medium. **Status:** Planned.
 
-- Simulate candidate battery capacities and usable energy, power limits, round-trip efficiency, degradation and installed cost.
-- Compare solar self-consumption, off-peak grid charging and export tradeoffs under verified tariffs.
-- Show annual savings, payback and sensitivity to uncertain future prices.
-- **Done when:** repeatable tests validate energy conservation and cost calculations across representative scenarios.
+- Identify source data for battery capacities, usable energy, power limits, efficiency, degradation and installed cost.
+- Make usage, generation, import and export rate inputs available for simulations in Jupyter or another client.
+- **Done when:** a client can retrieve traceable inputs for representative battery scenarios.
 
 ## Phase 5 — Recommendations and automation
 **Priority:** Later. **Status:** Exploratory.

@@ -27,10 +27,15 @@ In ChatGPT on the web: Plugins > + > Add custom MCP server > Connection: Tunnel,
 - "Compare my electricity use this week so far against the same days last week."
 - "Find the standard unit rates and standing charge for my tariff for the last week."
 - "List products available at 2025-01-01T00:00:00Z, then show the regional variants for a product."
+- "Use `tariff_ev_rates` to show the published household and device rates for my four-rate Intelligent Octopus agreement."
 
 `tariff_products` lists published products at a timezone-qualified timestamp; `tariff_product` retrieves the product's regional variants. Publication does not establish eligibility, and these tools do not compare costs. Product data may omit restricted tariffs or eligibility criteria; verify region, meter, payment method and product-specific requirements separately.
 
 `tariff_dual_rates` retrieves day and night rates and standing charges for a dual-register electricity tariff. Verify the meter's register allocation and switching times separately; the rates alone cannot allocate half-hour consumption or establish billed costs.
+
+`tariff_ev_rates` retrieves published household day and night unit rates, EV device peak and off-peak unit rates, and standing charges for four-rate electricity tariffs such as newer Intelligent Octopus Go variants. Use `tariff_product` to find a code under `four_rate_ev_electricity_tariffs`, then request up to 31 inclusive UK calendar dates. The tool returns source URLs, original Octopus VAT values, payment methods, and rate validity dates. Rate validity dates describe the published price period. Daily switching times, account-specific EV dispatches, and the price applied to a particular reading require separate data. Older Intelligent Octopus products can publish time windows under `tariff_rates` instead.
+
+Use the MCP responses as inputs to calculations in ChatGPT or Jupyter. The server provides readings, rates, and their provenance for reuse.
 
 Use the supply-point direction and meter-selection status returned by `list_meters`. If a supply point has multiple meter candidates, the account API does not provide enough physical meter validity data to identify the current one safely. Meter data can be late or incomplete. Data uses London calendar dates, including daylight saving transitions. Consumption responses identify agreements overlapping the requested dates. Electricity consumption is reported in kWh. Gas units are resolved for the selected meter using Kraken GraphQL `consumptionUnits`; SMETS1 data is documented as kWh and SMETS2 as m³. If the unit lookup fails or omits a historical meter, the unit remains explicitly unknown. No gas conversion is applied. Standard tariff rates do not fully model Intelligent Octopus dispatch or other special rates: costs are estimates, not bills. The API does not identify separate car consumption from the household meter. This version does not retrieve EV dispatch slots or real-time usage.
 
