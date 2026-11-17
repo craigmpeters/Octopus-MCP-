@@ -4,11 +4,13 @@ A personal, read-only MCP server: list meters and tariff agreements, fetch elect
 
 ## 1. Set up on your Docker host
 
-Unzip this directory on the machine running Docker, then open a terminal in the directory. You will need Docker Compose and internet access to Octopus. On OpenMediaVault you can use its Compose tooling with this directory as the build context.
+Copy `compose.yaml` and `.env.example` from this repository to a directory on your Docker host, then open a terminal there. The Compose file pulls `ghcr.io/craigmpeters/octopus-mcp:latest` (linux/amd64), so you do not need the source code or a local build. On OpenMediaVault, use the Compose plugin and place the `.env` file alongside the Compose file.
+
+The GitHub Actions workflow builds the image on pull requests and publishes it on pushes to `main`. The image will only exist after the first successful publish. New GitHub Container Registry packages may be private: if it is private, make the package public in GitHub Packages settings, or authenticate on the Docker host with `docker login ghcr.io` using a personal access token with `read:packages`. Do not put the token in the Compose file.
 
 1. Copy `.env.example` to `.env`: `cp .env.example .env`.
 2. Set your account number and API key in `.env` using a local editor. Octopus provides keys under its account dashboard's Developer settings: https://octopus.energy/help-and-faqs/articles/how-do-i-access-the-octopus-api/ . Do not paste the key into ChatGPT. Restrict access: `chmod 600 .env`.
-3. Run `docker compose up -d --build`.
+3. Run `docker compose pull` followed by `docker compose up -d`. To update later, run the same two commands.
 4. `docker compose logs --tail=30` should show startup. The endpoint is `http://127.0.0.1:8765/mcp` on that host. The port is bound to loopback only.
 
 ## 2. Connect securely to ChatGPT
@@ -27,6 +29,10 @@ In ChatGPT on the web: Plugins > + > Add custom MCP server > Connection: Tunnel,
 - "Find the standard unit rates and standing charge for my tariff for the last week."
 
 Choose the current import meter, not an old or export meter. Meter data can be late or incomplete. Data uses London calendar dates, including daylight saving transitions. Gas readings may be in m³ rather than kWh. Standard tariff rates do not fully model Intelligent Octopus dispatch or other special rates: costs are estimates, not bills. The API does not identify separate car consumption from the household meter. This version does not retrieve EV dispatch slots or real-time usage.
+
+## Container publishing
+
+The workflow also tags each published image with its Git commit SHA. For reproducible deployments, replace `latest` in `compose.yaml` with the desired commit SHA. Publishing uses the repository's `GITHUB_TOKEN` and `packages: write` permission; check the Actions run if publishing fails. The image is currently built for linux/amd64, suitable for the Dell PowerEdge R230.
 
 ## Status
 
