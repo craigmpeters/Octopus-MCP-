@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
 import server
+from upstream import Upstream
 
 
 ACCOUNT = {
@@ -58,10 +61,11 @@ def test_flat_meter_list_remains_compatible_and_adds_selection_metadata():
     assert [agreement['tariff_code'] for agreement in old_meter['active_agreements']] == ['CURRENT']
 
 
-def test_list_meters_reports_that_active_agreement_does_not_select_meter():
-    with patch.object(server, 'account', return_value=ACCOUNT), patch.object(server, 'datetime', wraps=datetime) as mocked_datetime:
+@pytest.mark.anyio
+async def test_list_meters_reports_that_active_agreement_does_not_select_meter():
+    with patch.object(Upstream, 'get', return_value=ACCOUNT), patch.object(server, 'datetime', wraps=datetime) as mocked_datetime:
         mocked_datetime.now.return_value = AS_OF
-        result = server.list_meters()
+        result = await server.list_meters()
     assert result['supply_points'][0]['meter_selection_status'] == 'ambiguous'
     assert 'Do not infer the current meter' in result['note']
 
