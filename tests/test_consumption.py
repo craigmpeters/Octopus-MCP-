@@ -43,16 +43,16 @@ def test_unowned_meter_rejected():
         server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
 
 
-def test_multiple_days_are_requested_separately_and_boundary_is_filtered():
+def test_default_order_pagination_filters_boundary_and_sorts():
     start = datetime(2026, 11, 8, tzinfo=timezone.utc)
+    records = [interval(start + timedelta(minutes=30 * n)) for n in range(337)]
+    descending = list(reversed(records))
+    pages = [{'results': descending[:250], 'next': 'https://api.octopus.energy/v1/next?page=2'},
+             {'results': descending[250:], 'next': None}]
     supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc'}]
-    def get_day(path, params):
-        day_start = datetime.fromisoformat(params['period_from'])
-        assert datetime.fromisoformat(params['period_to']) - day_start == timedelta(days=1)
-        return {'results': [interval(day_start + timedelta(minutes=30 * n)) for n in range(49)], 'next': None}
-    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=get_day) as get:
+    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=pages) as get:
         result = server.consumption('electricity', '123', 'abc', '2026-11-08', '2026-11-14')
-    assert get.call_count == 7
-    assert result['record_count'] == 336
-    assert result['records'][0] == interval(start)
-    assert result['records'][-1] == interval(start + timedelta(minutes=30 * 335))
+    assert get.call_count == 2
+    assert 'order_by' not in get.call_args_list[0].args[1]
+    assert get.call_args_list[1].args == ('https://api.octopus.energy/v1/next?page=2', None)
+    assert result['records'] == records[:336]

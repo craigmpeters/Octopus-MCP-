@@ -78,29 +78,20 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
     tz = ZoneInfo('Europe/London')
     begin = datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
     finish = datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
+    path = f'{fuel}-meter-points/{quote(meter_point, safe="")}/meters/{quote(serial_number, safe="")}/consumption/'
+    # The API default ordering paginates reliably in the observed live case;
+    # order_by=period returned overlapping pages and omitted intervals.
+    params = {'period_from': begin, 'period_to': finish, 'page_size': 250}
     records = []
-    # Keep requests below the normal page size: multi-day pagination has returned
-    # duplicate intervals in live use. Still follow pagination if an API page
-    # is unexpectedly short, and validate the combined response below.
-    for day_offset in range((end - start).days + 1):
-        day = start + timedelta(days=day_offset)
-        day_start = datetime.combine(day, datetime.min.time(), tz).astimezone(timezone.utc)
-        day_end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc)
-        path = f'{fuel}-meter-points/{quote(meter_point, safe="")}/meters/{quote(serial_number, safe="")}/consumption/'
-        params = {'period_from': day_start.isoformat(), 'period_to': day_end.isoformat(), 'page_size': 250, 'order_by': 'period'}
-        day_records = []
-        for _ in range(20):
-            data = get(path, params)
-            day_records.extend(data.get('results', []))
-            path = data.get('next')
-            if not path:
-                break
-            params = None
-        else:
-            raise ValueError('Too many consumption pages for one day')
-        # The API may include an interval at period_to. Filter per day so it
-        # cannot be duplicated by the following day's request.
-        records.extend(filter_consumption_records(day_records, day_start, day_end))
+    for _ in range(20):
+        data = get(path, params)
+        records.extend(data.get('results', []))
+        path = data.get('next')
+        if not path:
+            break
+        params = None
+    else:
+        raise ValueError('Too many pages; request a shorter period')
     # Octopus can return a reading starting at the exclusive period_to boundary.
     # Filter it out, while preserving legitimate short/long DST days.
     window_start = datetime.fromisoformat(begin)
