@@ -11,7 +11,7 @@ This roadmap is prioritized, not a claim of completed features. Each phase shoul
 - Preserve the existing `list_meters`, `consumption` and `tariff_rates` tools.
 
 ## Phase 1 — PR #2: Meter reliability and consumption validation
-**Priority:** Critical. **Status:** In progress. Consumption validation, coverage reporting and meter discovery have passed targeted live checks. Consumption responses now include agreements overlapping the requested dates and structured unit certainty; the API does not provide a gas unit or physical meter validity dates, so both remain explicitly unknown where applicable.
+**Priority:** Critical. **Status:** In progress. Consumption validation, coverage reporting and meter discovery have passed targeted live checks. Consumption responses include date-relevant agreements and resolve gas units through Kraken GraphQL `consumptionUnits`, falling back to an explicit unknown state for lookup failures or omitted historical meters. Physical meter validity dates remain unavailable.
 
 - Identify electricity import, electricity export and gas separately, including historical meters and date-relevant agreements.
 - Report ambiguous current meter candidates instead of guessing.
