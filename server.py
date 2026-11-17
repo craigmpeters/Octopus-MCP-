@@ -47,6 +47,28 @@ def agreement_is_active(agreement, as_of):
     valid_to = parse_api_datetime(agreement.get('valid_to'))
     return (valid_from is None or valid_from <= as_of) and (valid_to is None or as_of < valid_to)
 
+def agreement_overlaps(agreement, window_start, window_end):
+    valid_from = parse_api_datetime(agreement.get('valid_from'))
+    valid_to = parse_api_datetime(agreement.get('valid_to'))
+    return (valid_from is None or valid_from < window_end) and (valid_to is None or window_start < valid_to)
+
+def consumption_measurement(fuel):
+    if fuel == 'electricity':
+        return {
+            'value_field': 'consumption',
+            'quantity': 'energy',
+            'unit': 'kWh',
+            'unit_status': 'known',
+            'conversion_applied': False,
+        }
+    return {
+        'value_field': 'consumption',
+        'quantity': 'volume_or_energy',
+        'unit': None,
+        'unit_status': 'not_provided_by_api',
+        'conversion_applied': False,
+    }
+
 def meter_inventory(account_data=None, as_of=None):
     """Return compatible flat meters plus supply-point selection metadata."""
     account_data = account() if account_data is None else account_data
@@ -175,7 +197,8 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
     start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
     if end < start or (end - start).days > 30:
         raise ValueError('Use an inclusive date range of at most 31 days')
-    if not any(s['fuel'] == fuel and s['meter_point'] == meter_point and s['serial_number'] == serial_number for s in supplies()):
+    supply = next((s for s in supplies() if s['fuel'] == fuel and s['meter_point'] == meter_point and s['serial_number'] == serial_number), None)
+    if supply is None:
         raise ValueError('Meter does not belong to the configured account')
     tz = ZoneInfo('Europe/London')
     begin = datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
@@ -200,7 +223,12 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
     window_end = datetime.fromisoformat(finish)
     records = filter_consumption_records(records, window_start, window_end)
     coverage = consumption_coverage(records, window_start, window_end)
-    return {'fuel': fuel, 'start_date': start_date, 'end_date_inclusive': end_date, 'records': records, 'record_count': len(records), 'coverage': coverage, 'unit_note': 'Electricity kWh; gas may be m³ or kWh depending on meter. Confirm before calculating cost.', 'coverage_note': 'Missing or delayed intervals are not zero; dates converted from Europe/London. Returned intervals are sorted and restricted to the requested date window.'}
+    applicable_agreements = [agreement for agreement in supply.get('agreements', [])
+                             if agreement_overlaps(agreement, window_start, window_end)]
+    measurement = consumption_measurement(fuel)
+    unit_note = ('Consumption values are kWh.' if fuel == 'electricity' else
+                 'The API response does not identify whether gas values are m³ or kWh. No conversion has been applied.')
+    return {'fuel': fuel, 'start_date': start_date, 'end_date_inclusive': end_date, 'records': records, 'record_count': len(records), 'coverage': coverage, 'measurement': measurement, 'applicable_agreements': applicable_agreements, 'unit_note': unit_note, 'coverage_note': 'Missing or delayed intervals are not zero; dates converted from Europe/London. Returned intervals are sorted and restricted to the requested date window.'}
 
 @mcp.tool()
 def tariff_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
