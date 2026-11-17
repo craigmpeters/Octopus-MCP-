@@ -17,7 +17,7 @@ def test_uk_day_and_pagination(day, count):
     records = [interval(start + timedelta(minutes=30 * n)) for n in range(count)]
     pages = [{'results': list(reversed(records[20:])), 'next': 'https://api.octopus.energy/v1/next'},
              {'results': records[:20] + [interval(start + timedelta(minutes=30 * count))], 'next': None}]
-    supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc'}]
+    supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc', 'agreements': []}]
     with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=pages) as get:
         result = server.consumption('electricity', '123', 'abc', day, day)
     assert result['records'] == records
@@ -29,6 +29,13 @@ def test_uk_day_and_pagination(day, count):
         'missing_interval_count': 0,
         'complete': True,
         'gaps': [],
+    }
+    assert result['measurement'] == {
+        'value_field': 'consumption',
+        'quantity': 'energy',
+        'unit': 'kWh',
+        'unit_status': 'known',
+        'conversion_applied': False,
     }
     assert get.call_args_list[0].args[1]['period_from'] == start.isoformat()
     assert get.call_args_list[1].args[1] is None
@@ -49,6 +56,31 @@ def test_invalid_interval_rejected():
 def test_unowned_meter_rejected():
     with patch.object(server, 'supplies', return_value=[]), pytest.raises(ValueError, match='belong'):
         server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
+
+
+def test_gas_unit_remains_unknown_and_agreements_overlap_window():
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    records = [interval(start + timedelta(minutes=30 * n)) for n in range(48)]
+    supply = [{
+        'fuel': 'gas',
+        'meter_point': '123',
+        'serial_number': 'abc',
+        'agreements': [
+            {'tariff_code': 'BEFORE', 'valid_from': '2024-01-01T00:00:00Z', 'valid_to': '2025-01-01T00:00:00Z'},
+            {'tariff_code': 'DURING', 'valid_from': '2025-01-01T00:00:00Z', 'valid_to': None},
+        ],
+    }]
+    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', return_value={'results': records, 'next': None}):
+        result = server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
+    assert result['measurement'] == {
+        'value_field': 'consumption',
+        'quantity': 'volume_or_energy',
+        'unit': None,
+        'unit_status': 'not_provided_by_api',
+        'conversion_applied': False,
+    }
+    assert [agreement['tariff_code'] for agreement in result['applicable_agreements']] == ['DURING']
+    assert 'does not identify' in result['unit_note']
 
 
 def test_coverage_reports_consecutive_missing_intervals_as_one_gap():
@@ -78,7 +110,7 @@ def test_default_order_pagination_filters_boundary_and_sorts():
     descending = list(reversed(records))
     pages = [{'results': descending[:250], 'next': 'https://api.octopus.energy/v1/next?page=2'},
              {'results': descending[250:], 'next': None}]
-    supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc'}]
+    supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc', 'agreements': []}]
     with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=pages) as get:
         result = server.consumption('electricity', '123', 'abc', '2026-11-08', '2026-11-14')
     assert get.call_count == 2

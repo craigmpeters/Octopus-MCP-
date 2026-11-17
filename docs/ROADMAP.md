@@ -11,7 +11,7 @@ This roadmap is prioritized, not a claim of completed features. Each phase shoul
 - Preserve the existing `list_meters`, `consumption` and `tariff_rates` tools.
 
 ## Phase 1 — PR #2: Meter reliability and consumption validation
-**Priority:** Critical. **Status:** In progress. Consumption validation and coverage reporting are implemented. Meter discovery now separates import, export and gas, selects date-valid current agreements, and explicitly flags ambiguous physical meter candidates; live validation of the discovery metadata remains outstanding.
+**Priority:** Critical. **Status:** In progress. Consumption validation, coverage reporting and meter discovery have passed targeted live checks. Consumption responses now include agreements overlapping the requested dates and structured unit certainty; the API does not provide a gas unit or physical meter validity dates, so both remain explicitly unknown where applicable.
 
 - Identify electricity import, electricity export and gas separately, including historical meters and date-relevant agreements.
 - Report ambiguous current meter candidates instead of guessing.
@@ -19,6 +19,8 @@ This roadmap is prioritized, not a claim of completed features. Each phase shoul
 - Correctly handle 48/46/50 half-hour UK days and gas unit metadata.
 - Add mocked import/export/gas/DST tests and GitHub Actions test gate.
 - **Done when:** each fuel/direction can be queried independently, completeness is explicit, tests pass and read-only live validation has been performed.
+
+Live sampling across both ambiguous import and gas candidates found complete readings on one candidate for selected 2025–2026 dates, but no readings on either candidate for selected 2023–2024 dates. Consumption availability therefore does not establish historical installation dates and must not be used to label a candidate as the current physical meter.
 
 ## Phase 2 — PR #3: Tariff discovery and comparison
 **Priority:** High. **Status:** Planned.
