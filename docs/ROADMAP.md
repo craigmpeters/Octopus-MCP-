@@ -35,13 +35,15 @@ Live sampling across both ambiguous import and gas candidates found complete rea
 Kraken's GraphQL schema exposes `applicableRates` with account, meter point and time-range inputs. It returns a decimal value and validity timestamps, with no fields for rate units, VAT basis or dispatch provenance. Kraken rejected an unauthenticated sample query. An authenticated check on the deployment is needed before exposing the rates through MCP. [Private verification steps](TARIFF_APPLICABILITY.md)
 
 ## Phase 3 — PR #4: Solar and EV insights
-**Priority:** High. **Status:** Planned.
+**Priority:** High. **Status:** In progress. Separate electricity import and export readings and the export tariff's published rate passed a live check.
 
 - Provide separate import and export readings and verified export rates for client calculations.
 - Add optional read-only Home Assistant adapter with explicit entity mapping and protected credentials.
 - Use solar generation telemetry to estimate self-consumption; reconcile sampling intervals and energy units.
 - Add EV charging energy from verified charger telemetry and Octopus device/dispatch data where officially supported.
 - **Done when:** solar and EV cost analyses distinguish measured values from inferred/estimated values.
+
+A live MCP check for 8–14 November 2026 returned 336 complete import readings and 336 complete export readings from separate requests. The export agreement covered the sample window and matched the product's published regional variant. Exactly one published standard unit rate covered every export reading. This check covered one agreement and verified the published prices used for an estimate. [Export estimate workflow](../README.md#estimate-export-credit)
 
 ## Phase 4 — Data for client-side battery simulation
 **Priority:** Medium. **Status:** Planned.

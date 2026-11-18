@@ -49,6 +49,43 @@ def test_dual_rates_fetches_each_register_with_london_date_boundaries(monkeypatc
         server.tariff_dual_rates('../bad', 'E-2R-TEST-A', 'electricity', '2025-03-30', '2025-03-30')
 
 
+@pytest.mark.parametrize(('fuel', 'product', 'tariff'), [
+    ('electricity', 'EXPORT-TEST', 'E-1R-EXPORT-TEST-A'),
+    ('gas', 'GAS+TEST', 'G-1R-GAS+TEST-A'),
+])
+def test_standard_rates_include_provenance_and_preserve_published_rows(monkeypatch, fuel, product, tariff):
+    row = {
+        'value_exc_vat': 12.5, 'value_inc_vat': 13.125,
+        'valid_from': '2025-01-01T00:00:00Z', 'valid_to': None, 'payment_method': None,
+    }
+    calls = []
+
+    def fake_get(rest, path, params):
+        calls.append((path, params))
+        return {'results': [row] if path.endswith('/standard-unit-rates/') else []}
+
+    monkeypatch.setattr(server.OctopusREST, 'get', fake_get)
+    result = server.tariff_rates(product, tariff, fuel, '2025-03-30', '2025-03-30')
+
+    assert result['product_code'] == product
+    assert result['tariff_code'] == tariff
+    assert result['fuel'] == fuel
+    assert result['start_date'] == result['end_date_inclusive'] == '2025-03-30'
+    assert result['requested_period_utc'] == {
+        'period_from': '2025-03-30T00:00:00+00:00', 'period_to': '2025-03-30T23:00:00+00:00',
+    }
+    assert result['rates'] == {'standard-unit-rates': [row], 'standing-charges': []}
+    base = f'products/{product}/{fuel}-tariffs/{tariff}/'.replace('+', '%2B')
+    assert result['sources'] == {
+        'standard-unit-rates': server.API + base + 'standard-unit-rates/',
+        'standing-charges': server.API + base + 'standing-charges/',
+    }
+    assert [server.API + path for path, _ in calls] == list(result['sources'].values())
+    assert all(params == {**result['requested_period_utc'], 'page_size': 250} for _, params in calls)
+    assert result['units'] == {'unit_rates': 'pence/kWh', 'standing_charges': 'pence/day'}
+    assert result['empty_rate_categories'] == ['standing-charges']
+
+
 def test_ev_rates_keep_published_bands_separate_and_report_empty_category(monkeypatch):
     base = 'products/EV-TEST/electricity-tariffs/E-1R-EV-TEST-A/'
     second_page = server.API + base + 'ev-device-off-peak-unit-rates/?page=2'
