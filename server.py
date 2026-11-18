@@ -2,12 +2,13 @@
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urljoin
 from zoneinfo import ZoneInfo
 import httpx
 from mcp.server.fastmcp import FastMCP
 
 API = 'https://api.octopus.energy/v1/'
+REST_ORIGIN = httpx.URL(API)
 GRAPHQL_API = 'https://api.oegb-kraken.energy/v1/graphql/'
 KEY = os.getenv('OCTOPUS_API_KEY', '')
 ACCOUNT = os.getenv('OCTOPUS_ACCOUNT_NUMBER', '')
@@ -16,9 +17,12 @@ mcp = FastMCP('Personal Octopus Energy', host='0.0.0.0', port=8000, stateless_ht
 def get(path, params=None):
     if not KEY or not ACCOUNT:
         raise ValueError('Set OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER on the server.')
-    url = path if path.startswith('https://') else API + path.lstrip('/')
-    parsed = urlparse(url)
-    if parsed.scheme != 'https' or parsed.hostname not in ('api.octopus.energy', 'api.oegb-kraken.energy') or parsed.username or parsed.password or parsed.port not in (None, 443):
+    try:
+        url = httpx.URL(urljoin(API, path))
+    except (ValueError, TypeError, httpx.InvalidURL):
+        raise ValueError('Unexpected API pagination URL') from None
+    if (url.scheme != REST_ORIGIN.scheme or url.host != REST_ORIGIN.host
+            or url.port != REST_ORIGIN.port or url.userinfo):
         raise ValueError('Unexpected API pagination URL')
     try:
         with httpx.Client(auth=(KEY, ''), timeout=30, follow_redirects=False) as client:
