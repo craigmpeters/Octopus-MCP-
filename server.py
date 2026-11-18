@@ -122,7 +122,7 @@ def graphql_request(query, variables, token=None):
         raise ValueError('Unable to retrieve Octopus GraphQL metadata')
     return payload['data']
 
-def gas_consumption_unit(serial_number):
+def graphql_token():
     token_data = graphql_request(
         'mutation ObtainToken($input: ObtainJSONWebTokenInput!) '
         '{ obtainKrakenToken(input: $input) { token } }',
@@ -134,6 +134,10 @@ def gas_consumption_unit(serial_number):
         raise ValueError('Unable to retrieve Octopus GraphQL metadata') from None
     if not isinstance(token, str) or not token:
         raise ValueError('Unable to retrieve Octopus GraphQL metadata')
+    return token
+
+def gas_consumption_unit(serial_number):
+    token = graphql_token()
     account_data = graphql_request(
         'query GasConsumptionUnits($accountNumber: String!) '
         '{ account(accountNumber: $accountNumber) '
