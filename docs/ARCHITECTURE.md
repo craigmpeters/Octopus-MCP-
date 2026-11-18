@@ -40,7 +40,7 @@ The process reads `OCTOPUS_ACCOUNT_NUMBER` and `OCTOPUS_API_KEY` at startup. RES
 
 HTTPX disables redirect following and uses a 30-second timeout on network operations. Each page opens a new client. Pagination loops stop after 20 pages per collection. Those limits leave the total call duration and response bytes uncapped by the application. REST transport and status failures produce short tool errors. Product catalogue and newer rate helpers validate the results list, while consumption and standard rates currently interpret a missing results field as an empty list.
 
-REST pagination currently accepts both the Octopus REST host and the Kraken host and applies the REST credential to either. The intended boundary is the original REST origin. The contributor guide records this as pending work. Treat request URLs as sensitive because paths can contain account numbers, meter points and serials. [Contributor guide](../AGENTS.md)
+REST GETs resolve pagination links against the REST API base and validate the HTTPS origin before sending Basic credentials. The Kraken host is accessed only through the fixed GraphQL endpoint. Treat request URLs as sensitive because paths can contain account numbers, meter points and serials. [Contributor guide](../AGENTS.md)
 
 ### Packaging and release
 
