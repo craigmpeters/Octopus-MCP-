@@ -28,11 +28,31 @@ def get(path, params=None):
         with httpx.Client(auth=(KEY, ''), timeout=30, follow_redirects=False) as client:
             response = client.get(url, params=params)
             response.raise_for_status()
-            return response.json()
     except httpx.HTTPStatusError as exc:
         raise ValueError(f'Octopus API returned HTTP {exc.response.status_code}; check account, access and requested data.') from None
     except httpx.RequestError:
         raise ValueError('Unable to reach the Octopus API; try again later.') from None
+    try:
+        return response.json()
+    except ValueError:
+        raise ValueError('Octopus API returned invalid JSON') from None
+
+def paginated_results(path, params):
+    """Collect a paginated REST collection or fail without returning partial results."""
+    rows, seen = [], set()
+    for _ in range(20):
+        page = get(path, params)
+        if not isinstance(page, dict) or not isinstance(page.get('results'), list):
+            raise ValueError('Octopus API page is missing a valid results list')
+        rows.extend(page['results'])
+        path = page.get('next')
+        if path is None:
+            return rows
+        if not isinstance(path, str) or not path.strip() or path in seen:
+            raise ValueError('Invalid Octopus API pagination continuation')
+        seen.add(path)
+        params = None
+    raise ValueError('Too many Octopus API pages. Narrow the request.')
 
 def account():
     return get('accounts/' + quote(ACCOUNT, safe='') + '/')
@@ -270,16 +290,7 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
     # The API default ordering paginates reliably in the observed live case;
     # order_by=period returned overlapping pages and omitted intervals.
     params = {'period_from': begin, 'period_to': finish, 'page_size': 250}
-    records = []
-    for _ in range(20):
-        data = get(path, params)
-        records.extend(data.get('results', []))
-        path = data.get('next')
-        if not path:
-            break
-        params = None
-    else:
-        raise ValueError('Too many pages; request a shorter period')
+    records = paginated_results(path, params)
     # Octopus can return a reading starting at the exclusive period_to boundary.
     # Filter it out, while preserving legitimate short/long DST days.
     window_start = datetime.fromisoformat(begin)
@@ -302,24 +313,10 @@ def tariff_rates(product_code: str, tariff_code: str, fuel: str, start_date: str
     """Fetch standard unit rates and standing charges for a product and tariff, inclusive UK dates, up to 31 days. Economy 7 or special tariff rates may require other endpoints."""
     if fuel not in ('electricity', 'gas'):
         raise ValueError('fuel must be electricity or gas')
-    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
-    if end < start or (end-start).days > 30:
-        raise ValueError('Use at most 31 inclusive days')
-    tz = ZoneInfo('Europe/London')
-    params = {'period_from': datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat(), 'period_to': datetime.combine(end+timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat(), 'page_size': 250}
+    period = tariff_rate_period(start_date, end_date)
     base = f'products/{quote(product_code, safe="")}/{fuel}-tariffs/{quote(tariff_code, safe="")}/'
-    result = {}
-    for kind in ('standard-unit-rates', 'standing-charges'):
-        path, query, rows = base + kind + '/', params, []
-        for _ in range(20):
-            page = get(path, query)
-            rows.extend(page.get('results', []))
-            path, query = page.get('next'), None
-            if not path:
-                break
-        else:
-            raise ValueError('Too many tariff pages; request a shorter period')
-        result[kind] = rows
+    result = {kind: tariff_rate_rows(base + kind + '/', period)
+              for kind in ('standard-unit-rates', 'standing-charges')}
     return {'rates': result, 'note': 'Rates are in pence; use VAT-inclusive values. Standard rates may not capture EV dispatch, export, dual-rate, discounts or actual bills.'}
 
 @mcp.tool()
@@ -331,22 +328,9 @@ def tariff_products(available_at: str) -> dict:
             raise ValueError
     except (ValueError, TypeError, AttributeError):
         raise ValueError('available_at must be an ISO timestamp with a timezone') from None
-    path, params, products = 'products/', {'available_at': instant.astimezone(timezone.utc).isoformat(), 'page_size': 100}, []
-    seen = set()
-    for _ in range(20):
-        page = get(path, params)
-        if not isinstance(page, dict) or not isinstance(page.get('results'), list):
-            raise ValueError('Invalid product catalogue response')
-        products.extend(page['results'])
-        path, params = page.get('next'), None
-        if not path:
-            break
-        if not isinstance(path, str) or path in seen:
-            raise ValueError('Invalid product catalogue pagination')
-        seen.add(path)
-    else:
-        raise ValueError('Too many product pages')
-    return {'available_at': instant.astimezone(timezone.utc).isoformat(), 'products': products,
+    available_at_utc = instant.astimezone(timezone.utc).isoformat()
+    products = paginated_results('products/', {'available_at': available_at_utc, 'page_size': 100})
+    return {'available_at': available_at_utc, 'products': products,
             'eligibility': 'unknown', 'note': 'Published availability does not establish household eligibility. Check region, meter, payment method, export and product-specific requirements.'}
 
 @mcp.tool()
@@ -377,20 +361,7 @@ def tariff_rate_period(start_date, end_date):
     }
 
 def tariff_rate_rows(path, period):
-    query = {**period, 'page_size': 250}
-    rows, seen = [], set()
-    for _ in range(20):
-        page = get(path, query)
-        if not isinstance(page, dict) or not isinstance(page.get('results'), list):
-            raise ValueError('Invalid tariff rate response')
-        rows.extend(page['results'])
-        path, query = page.get('next'), None
-        if not path:
-            return rows
-        if not isinstance(path, str) or path in seen:
-            raise ValueError('Invalid tariff rate pagination')
-        seen.add(path)
-    raise ValueError('Too many tariff pages; request a shorter period')
+    return paginated_results(path, {**period, 'page_size': 250})
 
 @mcp.tool()
 def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
