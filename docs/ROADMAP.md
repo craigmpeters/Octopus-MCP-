@@ -32,7 +32,7 @@ Live sampling across both ambiguous import and gas candidates found complete rea
 
 `tariff_products` and `tariff_product` expose published catalogue discovery and regional variants. `tariff_dual_rates` exposes day/night rates and standing charges. For products listed under `four_rate_ev_electricity_tariffs`, `tariff_ev_rates` retrieves separate household and EV rate bands from the published endpoints. A current four-rate Intelligent Octopus product returned those bands even though its standard endpoint returned no unit rates. Household eligibility, switching schedules, and account-specific EV dispatch applicability still require separate evidence.
 
-Kraken's GraphQL schema exposes `applicableRates` with account, meter point and time-range inputs. It returns a decimal value and validity timestamps, with no fields for rate units, VAT basis or dispatch provenance. Kraken rejected an unauthenticated sample query. An authenticated check on the deployment is needed before exposing the rates through MCP. [Private verification steps](TARIFF_APPLICABILITY.md)
+The private deployment successfully queried Kraken's `applicableRates` for its electricity import supply point. The one-day sample had four rows, two distinct values and three overlapping rows. The combined intervals covered the full day. Rate precedence, units, VAT basis and EV dispatch applicability still need verification before exposing these rates through MCP. [Diagnostic and live result](TARIFF_APPLICABILITY.md)
 
 ## Phase 3 — PR #4: Solar and EV insights
 **Priority:** High. **Status:** In progress. Separate electricity import and export readings and the export tariff's published rate passed a live check.
