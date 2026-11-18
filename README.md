@@ -39,6 +39,13 @@ Use the MCP responses as inputs to calculations in ChatGPT or Jupyter. The serve
 
 Use the supply-point direction and meter-selection status returned by `list_meters`. If a supply point has multiple meter candidates, the account API does not provide enough physical meter validity data to identify the current one safely. Meter data can be late or incomplete. Data uses London calendar dates, including daylight saving transitions. Consumption responses identify agreements overlapping the requested dates. Electricity consumption is reported in kWh. Gas units are resolved for the selected meter using Kraken GraphQL `consumptionUnits`; SMETS1 data is documented as kWh and SMETS2 as m³. If the unit lookup fails or omits a historical meter, the unit remains explicitly unknown. No gas conversion is applied. Standard tariff rates do not fully model Intelligent Octopus dispatch or other special rates: costs are estimates, not bills. The API does not identify separate car consumption from the household meter. This version does not retrieve EV dispatch slots or real-time usage.
 
+### Estimate export credit
+
+1. Use `list_meters` to find the electricity export supply point, then call `consumption` for its meter and the desired UK dates. Check `coverage` before calculating a total. Keep any import readings separate.
+2. Use `applicable_agreements` to identify the export tariff code for each part of the window. For a code like `E-1R-EXAMPLE-A`, use `EXAMPLE` as the candidate product code. Confirm the exact tariff code in the product's regional variants with `tariff_product`, then call `tariff_rates` with `fuel: electricity` and the same date window. The response includes the upstream endpoints, UTC period, units, and empty rate categories.
+3. In your client, match each full UTC reading interval to its export agreement and one published unit-rate row. Treat `valid_to` as exclusive and a null bound as open-ended. If several rate rows match, use the applicable payment method when it is known. A null payment method is unspecified. Report any missing or unresolved intervals separately.
+4. Multiply exported kWh by the matched pence-per-kWh rate and divide the sum by 100 to estimate the credit in pounds. Use the published VAT field appropriate to the estimate and check statement treatment with Octopus. Standing charges are separate daily amounts. Exported kWh measures energy sent to the grid. Solar generation and self-consumption require separate telemetry.
+
 ## Deploy and refresh new MCP tools
 
 When a release adds or changes tools, update the running server, then refresh the tool list in ChatGPT.

@@ -26,7 +26,7 @@ All seven synchronous tools, their domain logic and the HTTP adapters live in [s
 | `consumption` | Matches fuel, point and serial against the account inventory before fetching readings. Returns sorted half-hours, coverage gaps, overlapping agreements and measurement metadata. |
 | `tariff_products` | Pages through published products at a timezone-aware instant. Household eligibility is unknown. |
 | `tariff_product` | Retrieves one product and its regional variants. |
-| `tariff_rates` | Retrieves standard unit rates and standing charges for electricity or gas. |
+| `tariff_rates` | Retrieves published standard unit rates and standing charges for electricity or gas, with source URLs, the UTC request window and units. Clients use the export agreement when pricing export readings. |
 | `tariff_dual_rates` | Retrieves electricity day, night and standing-charge records. |
 | `tariff_ev_rates` | Retrieves four published electricity rate bands and standing charges, with source URLs and empty categories. |
 

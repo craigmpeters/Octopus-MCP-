@@ -359,14 +359,22 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
 
 @mcp.tool()
 def tariff_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
-    """Fetch standard unit rates and standing charges for a product and tariff, inclusive UK dates, up to 31 days. Economy 7 or special tariff rates may require other endpoints."""
+    """Fetch published standard unit rates, standing charges and sources for a tariff, up to 31 inclusive UK dates."""
     if fuel not in ('electricity', 'gas'):
         raise ValueError('fuel must be electricity or gas')
     period = tariff_rate_period(start_date, end_date)
     base = tariff_path(product_code, tariff_code, fuel)
     paths = {kind: base + kind + '/' for kind in ('standard-unit-rates', 'standing-charges')}
-    result = fetch_tariff_rates(paths, period)
-    return {'rates': result, 'note': 'Rates are in pence; use VAT-inclusive values. Standard rates may not capture EV dispatch, export, dual-rate, discounts or actual bills.'}
+    return {
+        'product_code': product_code,
+        'tariff_code': tariff_code,
+        'fuel': fuel,
+        'start_date': start_date,
+        'end_date_inclusive': end_date,
+        **published_rate_data(paths, period),
+        'note': ('For export estimates, use the export supply agreement and match each reading to a published rate '
+                 'that covers its interval. Dual-register pricing, EV dispatch and discounts may require other data.'),
+    }
 
 @mcp.tool()
 def tariff_products(available_at: str) -> dict:
@@ -422,6 +430,16 @@ def fetch_tariff_rates(paths, period):
         params = {**period, 'page_size': 250}
         return {kind: paginated_results(rest, path, params) for kind, path in paths.items()}
 
+def published_rate_data(paths, period):
+    rates = fetch_tariff_rates(paths, period)
+    return {
+        'requested_period_utc': period,
+        'sources': {kind: API + path for kind, path in paths.items()},
+        'rates': rates,
+        'units': {'unit_rates': 'pence/kWh', 'standing_charges': 'pence/day'},
+        'empty_rate_categories': [kind for kind, rows in rates.items() if not rows],
+    }
+
 @mcp.tool()
 def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
     """Fetch published day and night unit rates for a dual-register tariff, for up to 31 UK dates."""
@@ -445,17 +463,12 @@ def tariff_ev_rates(product_code: str, tariff_code: str, start_date: str, end_da
     kinds = ('day-unit-rates', 'night-unit-rates', 'ev-device-peak-unit-rates',
              'ev-device-off-peak-unit-rates', 'standing-charges')
     paths = {kind: base + kind + '/' for kind in kinds}
-    rates = fetch_tariff_rates(paths, period)
     return {
         'product_code': product_code,
         'tariff_code': tariff_code,
         'start_date': start_date,
         'end_date_inclusive': end_date,
-        'requested_period_utc': period,
-        'sources': {kind: API + path for kind, path in paths.items()},
-        'rates': rates,
-        'units': {'unit_rates': 'pence/kWh', 'standing_charges': 'pence/day'},
-        'empty_rate_categories': [kind for kind, rows in rates.items() if not rows],
+        **published_rate_data(paths, period),
         'note': ('Rate records preserve Octopus VAT values, payment method and validity timestamps. '
                  'Validity timestamps are for the published price, not the daily switching hours. '
                  'Account-specific EV dispatches and rate applicability require separate data.'),
