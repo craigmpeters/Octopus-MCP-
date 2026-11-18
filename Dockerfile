@@ -3,6 +3,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY server.py .
+COPY check_applicable_rates.py .
 USER 65534:65534
 EXPOSE 8000
 CMD ["python", "server.py"]
