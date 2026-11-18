@@ -71,6 +71,20 @@ Do not mark a phase complete because code was drafted. Require code review, pass
 
 ### Live validation note (2026-11-17)
 
-Single-day import, export and gas requests returned 48 intervals on a normal day and 50 on the autumn clock-change day. A seven-day request failed duplicate detection for all three. Daily requests are used as a workaround pending validation of the updated deployment; the cause of the multi-day pagination failure is not yet established. This increases API requests for longer ranges. Do not treat these checks as full live validation.
+Single-day import, export and gas requests returned 48 intervals on a normal day and 50 on the autumn clock-change day. A seven-day request failed duplicate detection for all three, so daily requests were used as a workaround.
 
-A subsequent seven-day electricity API diagnostic found 64 overlapping intervals with `order_by=period` and none with the default ordering. The implementation now uses default ordering and sorts locally; live validation of the revised implementation remains outstanding. This observation does not establish the API’s underlying cause or guarantee completeness.
+A subsequent seven-day electricity API diagnostic found 64 overlapping intervals with `order_by=period` and zero with the default ordering. The implementation switched to default upstream ordering and sorts the results locally. The cause of the overlapping pages remains unknown.
+
+### Live multi-day validation (2026-11-18)
+
+Through the private MCP connection, a seven-day `consumption` request for 8–14 November 2026 was compared with seven single-day requests for the same UK dates and meter. For import and gas, one of the two discovered candidates returned readings on the first day and was used for the comparison. The export point had one candidate. Physical meter validity remains unknown.
+
+| Supply | Seven-day intervals | Daily intervals combined | Gaps | Duplicates | Out of order |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Electricity import | 336 | 336 | 0 | 0 | 0 |
+| Electricity export | 336 | 336 | 0 | 0 | 0 |
+| Gas | 336 | 336 | 0 | 0 | 0 |
+
+All seven daily responses returned 48 readings for each supply. Interval timestamps and reported consumption values matched between weekly and daily requests, and every response reported complete coverage. This multi-day check covered one candidate per supply and a week of 48-interval days.
+
+The operator reported deploying PR #16 before the checks. The image for merge commit `432e8bb2025ec4d5cbd9785d8d1a45cbdecc3a26` was published successfully. The running container's image ID was unavailable through MCP. [Publish run](https://github.com/craigmpeters/Octopus-MCP-/actions/runs/44371895087)
