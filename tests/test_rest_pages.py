@@ -34,7 +34,7 @@ def mock_rest(monkeypatch):
 @pytest.fixture
 def fetch_consumption(monkeypatch):
     supply = {'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'test-meter'}
-    monkeypatch.setattr(server, 'supplies', lambda: [supply])
+    monkeypatch.setattr(server, 'supplies', lambda rest: [supply])
     return lambda: server.consumption('electricity', '123', 'test-meter', DAY, DAY)
 
 

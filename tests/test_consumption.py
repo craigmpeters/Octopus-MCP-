@@ -18,7 +18,7 @@ def test_uk_day_and_pagination(day, count):
     pages = [{'results': list(reversed(records[20:])), 'next': 'https://api.octopus.energy/v1/next'},
              {'results': records[:20] + [interval(start + timedelta(minutes=30 * count))], 'next': None}]
     supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc', 'agreements': []}]
-    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=pages) as get:
+    with patch.object(server, 'supplies', return_value=supply), patch.object(server.OctopusREST, 'get', side_effect=pages) as get:
         result = server.consumption('electricity', '123', 'abc', day, day)
     assert result['records'] == records
     assert result['record_count'] == count
@@ -71,7 +71,7 @@ def test_gas_unit_and_agreements_overlap_window():
         ],
     }]
     with patch.object(server, 'supplies', return_value=supply), \
-            patch.object(server, 'get', return_value={'results': records, 'next': None}), \
+            patch.object(server.OctopusREST, 'get', return_value={'results': records, 'next': None}), \
             patch.object(server, 'gas_consumption_unit', return_value='m³'):
         result = server.consumption('gas', '123', 'abc', '2025-01-01', '2025-01-01')
     assert result['measurement'] == {
@@ -142,7 +142,7 @@ def test_default_order_pagination_filters_boundary_and_sorts():
     pages = [{'results': descending[:250], 'next': 'https://api.octopus.energy/v1/next?page=2'},
              {'results': descending[250:], 'next': None}]
     supply = [{'fuel': 'electricity', 'meter_point': '123', 'serial_number': 'abc', 'agreements': []}]
-    with patch.object(server, 'supplies', return_value=supply), patch.object(server, 'get', side_effect=pages) as get:
+    with patch.object(server, 'supplies', return_value=supply), patch.object(server.OctopusREST, 'get', side_effect=pages) as get:
         result = server.consumption('electricity', '123', 'abc', '2026-11-08', '2026-11-14')
     assert get.call_count == 2
     assert 'order_by' not in get.call_args_list[0].args[1]

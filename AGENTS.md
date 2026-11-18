@@ -25,8 +25,8 @@ Tests use synthetic fixtures and mocked upstream calls. They run without an Octo
 
 ## Prioritized follow-up work
 
-1. **Bound transport work.** Reuse an HTTPX client across pages within a tool call. Bound response bytes and cumulative work across rate categories. Use mocked oversized or slow pages to verify early termination and cleanup. Consolidate date-window and identifier handling with compatibility tests as those paths change.
+Use the [roadmap](docs/ROADMAP.md) to pick the next tariff applicability, telemetry or simulation task. The [architecture](docs/ARCHITECTURE.md#credentials-requests-and-failures) documents the REST limits shared across pages and rate categories.
 
 The roadmap records the [live multi-day consumption checks](docs/ROADMAP.md#live-multi-day-validation-2026-11-18) for electricity import, electricity export and gas.
 
-Keep PRs small and distinguish mocked coverage from deployed behavior. Review CI before merge. A PR build validates packaging. Publishing and updating a running instance are separate release steps. Prioritize later tariff applicability, telemetry and simulation work according to the [roadmap](docs/ROADMAP.md).
+Keep PRs small and distinguish mocked coverage from deployed behavior. Review CI before merge. A PR build validates packaging. Publishing and updating a running instance are separate release steps.
