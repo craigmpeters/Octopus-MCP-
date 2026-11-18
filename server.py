@@ -1,7 +1,9 @@
 """Personal, local-only, read-only Octopus Energy MCP server."""
+import json
 import os
 import re
 from datetime import date, datetime, timedelta, timezone
+from time import monotonic
 from urllib.parse import quote, urljoin
 from zoneinfo import ZoneInfo
 import httpx
@@ -12,36 +14,84 @@ REST_ORIGIN = httpx.URL(API)
 GRAPHQL_API = 'https://api.oegb-kraken.energy/v1/graphql/'
 KEY = os.getenv('OCTOPUS_API_KEY', '')
 ACCOUNT = os.getenv('OCTOPUS_ACCOUNT_NUMBER', '')
+REST_REQUEST_LIMIT = 40
+REST_RESPONSE_BYTES = 2 * 1024 * 1024
+REST_TOTAL_BYTES = 8 * 1024 * 1024
+REST_TIME_BUDGET = 45
+HTTP_TIMEOUT = 30
+UK_TIMEZONE = ZoneInfo('Europe/London')
+TARIFF_IDENTIFIER = re.compile(r'[A-Za-z0-9_-]{1,100}')
 mcp = FastMCP('Personal Octopus Energy', host='0.0.0.0', port=8000, stateless_http=True, json_response=True)
 
-def get(path, params=None):
-    if not KEY or not ACCOUNT:
-        raise ValueError('Set OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER on the server.')
-    try:
-        url = httpx.URL(urljoin(API, path))
-    except (ValueError, TypeError, httpx.InvalidURL):
-        raise ValueError('Unexpected API pagination URL') from None
-    if (url.scheme != REST_ORIGIN.scheme or url.host != REST_ORIGIN.host
-            or url.port != REST_ORIGIN.port or url.userinfo):
-        raise ValueError('Unexpected API pagination URL')
-    try:
-        with httpx.Client(auth=(KEY, ''), timeout=30, follow_redirects=False) as client:
-            response = client.get(url, params=params)
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        raise ValueError(f'Octopus API returned HTTP {exc.response.status_code}; check account, access and requested data.') from None
-    except httpx.RequestError:
-        raise ValueError('Unable to reach the Octopus API; try again later.') from None
-    try:
-        return response.json()
-    except ValueError:
-        raise ValueError('Octopus API returned invalid JSON') from None
+class OctopusREST:
+    """Own one HTTP client and a shared REST budget for a single tool call."""
 
-def paginated_results(path, params):
+    def __init__(self):
+        self.client = httpx.Client(
+            auth=(KEY, ''), follow_redirects=False, headers={'Accept-Encoding': 'identity'},
+        )
+        self.requests_left = REST_REQUEST_LIMIT
+        self.bytes_left = REST_TOTAL_BYTES
+        self.deadline = monotonic() + REST_TIME_BUDGET
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.client.close()
+
+    def remaining_time(self):
+        remaining = self.deadline - monotonic()
+        if remaining <= 0:
+            raise ValueError('Octopus API time budget exceeded. Narrow the request.')
+        return remaining
+
+    def get(self, path, params=None):
+        if not KEY or not ACCOUNT:
+            raise ValueError('Set OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER on the server.')
+        try:
+            url = httpx.URL(urljoin(API, path))
+        except (ValueError, TypeError, httpx.InvalidURL):
+            raise ValueError('Unexpected API pagination URL') from None
+        if (url.scheme != REST_ORIGIN.scheme or url.host != REST_ORIGIN.host
+                or url.port != REST_ORIGIN.port or url.userinfo):
+            raise ValueError('Unexpected API pagination URL')
+        if self.requests_left == 0:
+            raise ValueError('Octopus API request budget exceeded. Narrow the request.')
+        if self.bytes_left == 0:
+            raise ValueError('Octopus API response budget exceeded. Narrow the request.')
+        self.requests_left -= 1
+        timeout = min(HTTP_TIMEOUT, self.remaining_time())
+        try:
+            with self.client.stream('GET', url, params=params, timeout=timeout) as response:
+                response.raise_for_status()
+                self.remaining_time()
+                if response.headers.get('Content-Encoding', 'identity').lower() != 'identity':
+                    raise ValueError('Unexpected encoding in Octopus API response')
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    self.remaining_time()
+                    if len(chunk) > self.bytes_left:
+                        raise ValueError('Octopus API response budget exceeded. Narrow the request.')
+                    if len(body) + len(chunk) > REST_RESPONSE_BYTES:
+                        raise ValueError('Octopus API response is too large')
+                    self.bytes_left -= len(chunk)
+                    body.extend(chunk)
+                self.remaining_time()
+        except httpx.HTTPStatusError as exc:
+            raise ValueError(f'Octopus API returned HTTP {exc.response.status_code}; check account, access and requested data.') from None
+        except httpx.RequestError:
+            raise ValueError('Unable to reach the Octopus API; try again later.') from None
+        try:
+            return json.loads(body)
+        except (ValueError, RecursionError):
+            raise ValueError('Octopus API returned invalid JSON') from None
+
+def paginated_results(rest, path, params):
     """Collect a paginated REST collection or fail without returning partial results."""
     rows, seen = [], set()
     for _ in range(20):
-        page = get(path, params)
+        page = rest.get(path, params)
         if not isinstance(page, dict) or not isinstance(page.get('results'), list):
             raise ValueError('Octopus API page is missing a valid results list')
         rows.extend(page['results'])
@@ -54,15 +104,15 @@ def paginated_results(path, params):
         params = None
     raise ValueError('Too many Octopus API pages. Narrow the request.')
 
-def account():
-    return get('accounts/' + quote(ACCOUNT, safe='') + '/')
+def account(rest):
+    return rest.get('accounts/' + quote(ACCOUNT, safe='') + '/')
 
 def graphql_request(query, variables, token=None):
     if not KEY or not ACCOUNT:
         raise ValueError('Set OCTOPUS_API_KEY and OCTOPUS_ACCOUNT_NUMBER on the server.')
     headers = {'Authorization': token} if token else None
     try:
-        with httpx.Client(timeout=30, follow_redirects=False) as client:
+        with httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=False) as client:
             response = client.post(GRAPHQL_API, headers=headers, json={'query': query, 'variables': variables})
             response.raise_for_status()
             payload = response.json()
@@ -152,9 +202,8 @@ def consumption_measurement(fuel, serial_number=None):
         'conversion_applied': False,
     }
 
-def meter_inventory(account_data=None, as_of=None):
+def meter_inventory(account_data, as_of=None):
     """Return compatible flat meters plus supply-point selection metadata."""
-    account_data = account() if account_data is None else account_data
     as_of = datetime.now(timezone.utc) if as_of is None else as_of
     meters = []
     supply_points = []
@@ -203,13 +252,14 @@ def meter_inventory(account_data=None, as_of=None):
                     })
     return {'meters': meters, 'supply_points': supply_points, 'as_of': as_of.isoformat()}
 
-def supplies():
-    return meter_inventory()['meters']
+def supplies(rest):
+    return meter_inventory(account(rest))['meters']
 
 @mcp.tool()
 def list_meters() -> dict:
     """List account meters and known tariff agreements; identifies import/export where available."""
-    inventory = meter_inventory()
+    with OctopusREST() as rest:
+        inventory = meter_inventory(account(rest))
     inventory['note'] = ('A supply point with multiple meter candidates is ambiguous because the account API does not provide '
                          'physical meter validity dates. Do not infer the current meter from the active tariff agreement.')
     return inventory
@@ -277,24 +327,19 @@ def consumption(fuel: str, meter_point: str, serial_number: str, start_date: str
     """Get meter consumption for inclusive UK dates YYYY-MM-DD, up to 31 days. Use list_meters first. Data can be delayed or missing; gas units may be m3."""
     if fuel not in ('electricity', 'gas'):
         raise ValueError('fuel must be electricity or gas')
-    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
-    if end < start or (end - start).days > 30:
-        raise ValueError('Use an inclusive date range of at most 31 days')
-    supply = next((s for s in supplies() if s['fuel'] == fuel and s['meter_point'] == meter_point and s['serial_number'] == serial_number), None)
-    if supply is None:
-        raise ValueError('Meter does not belong to the configured account')
-    tz = ZoneInfo('Europe/London')
-    begin = datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
-    finish = datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat()
+    window_start, window_end = uk_date_window(start_date, end_date)
     path = f'{fuel}-meter-points/{quote(meter_point, safe="")}/meters/{quote(serial_number, safe="")}/consumption/'
     # The API default ordering paginates reliably in the observed live case;
     # order_by=period returned overlapping pages and omitted intervals.
-    params = {'period_from': begin, 'period_to': finish, 'page_size': 250}
-    records = paginated_results(path, params)
+    params = {'period_from': window_start.isoformat(), 'period_to': window_end.isoformat(), 'page_size': 250}
+    with OctopusREST() as rest:
+        supply = next((s for s in supplies(rest) if s['fuel'] == fuel and s['meter_point'] == meter_point
+                       and s['serial_number'] == serial_number), None)
+        if supply is None:
+            raise ValueError('Meter does not belong to the configured account')
+        records = paginated_results(rest, path, params)
     # Octopus can return a reading starting at the exclusive period_to boundary.
     # Filter it out, while preserving legitimate short/long DST days.
-    window_start = datetime.fromisoformat(begin)
-    window_end = datetime.fromisoformat(finish)
     records = filter_consumption_records(records, window_start, window_end)
     coverage = consumption_coverage(records, window_start, window_end)
     applicable_agreements = [agreement for agreement in supply.get('agreements', [])
@@ -314,9 +359,9 @@ def tariff_rates(product_code: str, tariff_code: str, fuel: str, start_date: str
     if fuel not in ('electricity', 'gas'):
         raise ValueError('fuel must be electricity or gas')
     period = tariff_rate_period(start_date, end_date)
-    base = f'products/{quote(product_code, safe="")}/{fuel}-tariffs/{quote(tariff_code, safe="")}/'
-    result = {kind: tariff_rate_rows(base + kind + '/', period)
-              for kind in ('standard-unit-rates', 'standing-charges')}
+    base = tariff_path(product_code, tariff_code, fuel)
+    paths = {kind: base + kind + '/' for kind in ('standard-unit-rates', 'standing-charges')}
+    result = fetch_tariff_rates(paths, period)
     return {'rates': result, 'note': 'Rates are in pence; use VAT-inclusive values. Standard rates may not capture EV dispatch, export, dual-rate, discounts or actual bills.'}
 
 @mcp.tool()
@@ -329,39 +374,49 @@ def tariff_products(available_at: str) -> dict:
     except (ValueError, TypeError, AttributeError):
         raise ValueError('available_at must be an ISO timestamp with a timezone') from None
     available_at_utc = instant.astimezone(timezone.utc).isoformat()
-    products = paginated_results('products/', {'available_at': available_at_utc, 'page_size': 100})
+    with OctopusREST() as rest:
+        products = paginated_results(rest, 'products/', {'available_at': available_at_utc, 'page_size': 100})
     return {'available_at': available_at_utc, 'products': products,
             'eligibility': 'unknown', 'note': 'Published availability does not establish household eligibility. Check region, meter, payment method, export and product-specific requirements.'}
 
 @mcp.tool()
 def tariff_product(product_code: str) -> dict:
     """Retrieve a product and its regional tariff variants; eligibility is not established."""
-    if not isinstance(product_code, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', product_code):
+    if not isinstance(product_code, str) or not TARIFF_IDENTIFIER.fullmatch(product_code):
         raise ValueError('Invalid product code')
-    product = get(f'products/{product_code}/')
+    with OctopusREST() as rest:
+        product = rest.get(f'products/{product_code}/')
     if not isinstance(product, dict):
         raise ValueError('Invalid product response')
     return {'product': product, 'eligibility': 'unknown',
             'note': 'Regional variants and published prices do not establish household eligibility or an actual bill.'}
 
+def tariff_path(product_code, tariff_code, fuel):
+    return f'products/{quote(product_code, safe="")}/{fuel}-tariffs/{quote(tariff_code, safe="")}/'
+
 def electricity_tariff_path(product_code, tariff_code):
     for code in (product_code, tariff_code):
-        if not isinstance(code, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', code):
+        if not isinstance(code, str) or not TARIFF_IDENTIFIER.fullmatch(code):
             raise ValueError('Invalid product or tariff code')
-    return f'products/{product_code}/electricity-tariffs/{tariff_code}/'
+    return tariff_path(product_code, tariff_code, 'electricity')
 
-def tariff_rate_period(start_date, end_date):
+def uk_date_window(start_date, end_date):
     start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
     if end < start or (end - start).days > 30:
         raise ValueError('Use at most 31 inclusive days')
-    tz = ZoneInfo('Europe/London')
-    return {
-        'period_from': datetime.combine(start, datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
-        'period_to': datetime.combine(end + timedelta(days=1), datetime.min.time(), tz).astimezone(timezone.utc).isoformat(),
-    }
+    return (
+        datetime.combine(start, datetime.min.time(), UK_TIMEZONE).astimezone(timezone.utc),
+        datetime.combine(end + timedelta(days=1), datetime.min.time(), UK_TIMEZONE).astimezone(timezone.utc),
+    )
 
-def tariff_rate_rows(path, period):
-    return paginated_results(path, {**period, 'page_size': 250})
+def tariff_rate_period(start_date, end_date):
+    start, end = uk_date_window(start_date, end_date)
+    return {'period_from': start.isoformat(), 'period_to': end.isoformat()}
+
+def fetch_tariff_rates(paths, period):
+    with OctopusREST() as rest:
+        params = {**period, 'page_size': 250}
+        return {kind: paginated_results(rest, path, params) for kind, path in paths.items()}
 
 @mcp.tool()
 def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date: str, end_date: str) -> dict:
@@ -371,7 +426,7 @@ def tariff_dual_rates(product_code: str, tariff_code: str, fuel: str, start_date
         raise ValueError('Dual-register rates are supported for electricity only')
     period = tariff_rate_period(start_date, end_date)
     kinds = ('day-unit-rates', 'night-unit-rates', 'standing-charges')
-    rates = {kind: tariff_rate_rows(base + kind + '/', period) for kind in kinds}
+    rates = fetch_tariff_rates({kind: base + kind + '/' for kind in kinds}, period)
     return {'rates': rates, 'note': 'Rates are pence; use VAT-inclusive values. Day/night switching times and meter register allocation must be verified separately. These rates are not a bill or a cost comparison.'}
 
 @mcp.tool()
@@ -386,7 +441,7 @@ def tariff_ev_rates(product_code: str, tariff_code: str, start_date: str, end_da
     kinds = ('day-unit-rates', 'night-unit-rates', 'ev-device-peak-unit-rates',
              'ev-device-off-peak-unit-rates', 'standing-charges')
     paths = {kind: base + kind + '/' for kind in kinds}
-    rates = {kind: tariff_rate_rows(path, period) for kind, path in paths.items()}
+    rates = fetch_tariff_rates(paths, period)
     return {
         'product_code': product_code,
         'tariff_code': tariff_code,
