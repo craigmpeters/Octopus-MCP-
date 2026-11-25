@@ -4,7 +4,7 @@ A personal, read-only MCP server: list meters and tariff agreements, fetch elect
 
 ## 1. Set up on your Docker host
 
-Use the repository's `compose.yaml` as a template. On OpenMediaVault, create or edit the stack in **Services → Compose → Files**. On other Docker hosts, copy the file to a private directory. The Compose file pulls `ghcr.io/craigmpeters/octopus-mcp:latest` (linux/amd64), so you do not need the source code or a local build.
+Use the repository's `compose.yaml` as a template. It names both the Compose service and the Docker container `octopusmcp`. On OpenMediaVault, create or edit the stack in **Services → Compose → Files**. On other Docker hosts, copy the file to a private directory. The Compose file pulls `ghcr.io/craigmpeters/octopus-mcp:latest` (linux/amd64), so you do not need the source code or a local build.
 
 The GitHub Actions workflow builds the image on pull requests and publishes it on pushes to `main`. The image will only exist after the first successful publish. New GitHub Container Registry packages may be private: if it is private, make the package public in GitHub Packages settings, or authenticate on the Docker host with `docker login ghcr.io` using a personal access token with `read:packages`. Do not put the token in the Compose file.
 
@@ -55,7 +55,7 @@ When a release adds or changes tools, update the running server, then refresh th
 3. In **ChatGPT on the web → Plugins**, open the existing Octopus Energy connection and click **Refresh** to load its updated tool list. [OpenAI's refresh instructions](https://developers.openai.com/apps-sdk/deploy/connect-chatgpt#refresh-metadata)
 4. Start a new conversation, select Octopus Energy with `@`, and ask it to call a newly added tool. For tariff discovery, try “Use `tariff_products` to list products available at `2026-11-17T00:00:00Z`.” A successful call to an older tool confirms connectivity only.
 
-If a new tool is missing, open **OMV → Services → Compose → Containers**, select the running Octopus MCP container, and click **Inspect**. Compare its top-level `Image` field to the `Id` shown under **Services → Compose → Images → Inspect** for the repository and tag you just pulled. The registry manifest digest and the Docker image ID are different identifiers. Share only the `Image` field if you need help, since the full container Inspect output can contain credentials.
+If a new tool is missing, open **OMV → Services → Compose → Containers**, select the `octopusmcp` container, and click **Inspect**. Compare its top-level `Image` field to the `Id` shown under **Services → Compose → Images → Inspect** for the repository and tag you just pulled. The registry manifest digest and the Docker image ID are different identifiers. Share only the `Image` field if you need help, since the full container Inspect output can contain credentials.
 
 If the image ID matches, use **Logs** on that same container while making a read-only request from ChatGPT. For example, request standard rates for public tariff `E-1R-AGILE-24-10-01-A` on a specific date, then look for the matching tariff code and date near the bottom of the logs. A matching request confirms the tunnel reaches that container. If the new tool still does not appear, check the ChatGPT connection's refresh and the tool list in a new conversation. If the request is missing from the container's logs, check the tunnel target and its `/mcp` path.
 

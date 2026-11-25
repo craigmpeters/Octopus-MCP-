@@ -1,5 +1,6 @@
 services:
-  octopus-mcp:
+  octopusmcp:
+    container_name: octopusmcp
     image: ghcr.io/craigmpeters/octopus-mcp:latest
     restart: unless-stopped
     environment:
