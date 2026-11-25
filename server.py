@@ -1,4 +1,5 @@
 """Personal, local-only, read-only Octopus Energy MCP server."""
+from calendar import monthrange
 import json
 import os
 import re
@@ -489,10 +490,10 @@ query BillingAgreements($account: String!, $start: DateTime!) {
 """
 
 BILLING_ITEMS = """
-query BillingItems($id: ID!, $start: DateTime!, $after: String) {
+query BillingItems($id: ID!, $start: DateTime!, $grouping: LineItemGroupingOptions!, $after: String) {
   electricityAgreement(id: $id) {
     ... on ElectricityAgreementType {
-      lineItems(startAt: $start, grouping: HALF_HOUR, itemType: CONSUMPTION_CHARGE,
+      lineItems(startAt: $start, grouping: $grouping, itemType: CONSUMPTION_CHARGE,
                 timezone: "Europe/London", first: 100, after: $after) {
         pageInfo { hasNextPage endCursor }
         edges { node { startAt endAt netAmount numberOfUnits settlementUnit itemType } }
@@ -503,17 +504,78 @@ query BillingItems($id: ID!, $start: DateTime!, $after: String) {
 """
 
 
+ISSUED_BILLS = """
+query IssuedBills($account: String!, $start: Date!, $end: Date!, $after: String) {
+  account(accountNumber: $account) {
+    bills(issuedFromDate: $start, issuedToDate: $end, includeInvoices: true,
+          includeBillsWithoutPDF: true, includeOpenStatements: false,
+          includeHeldStatements: false, first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      edges { node { id billType issuedDate fromDate toDate
+        ... on InvoiceType { grossAmountPence: grossAmount isAnnulled }
+      } }
+    }
+  }
+}
+"""
+
+
+def billing_page(page, after):
+    edges = page['edges']
+    info = page['pageInfo']
+    more = info['hasNextPage']
+    cursor = info['endCursor'] if more else None
+    if (not isinstance(more, bool) or not isinstance(edges, list)
+            or (more and (not isinstance(cursor, str) or not cursor or cursor == after))):
+        raise ValueError
+    return edges, cursor
+
+
+def monthly_bills(month, first, last, after):
+    variables = {'account': ACCOUNT, 'start': first.isoformat(),
+                 'end': (last + timedelta(days=1)).isoformat(), 'after': after}
+    data = graphql_request(ISSUED_BILLS, variables, graphql_token())
+    try:
+        edges, cursor = billing_page(data['account']['bills'], after)
+        records = []
+        for edge in edges:
+            bill = edge['node']
+            issued = date.fromisoformat(bill['issuedDate'])
+            if first <= issued <= last:
+                records.append(bill)
+    except (KeyError, TypeError, ValueError):
+        raise ValueError('Kraken returned incomplete issued bill data.') from None
+    return {'status': 'ok', 'source': 'Kraken account.bills', 'month': month,
+            'start_date': first.isoformat(), 'end_date_inclusive': last.isoformat(),
+            'records': records, 'next_cursor': cursor}
+
+
 @mcp.tool()
-def billing(meter_point: str, day: str, agreement_id: str | None = None,
-            after: str | None = None) -> dict:
-    """Get Kraken consumption charge lines for an account electricity import point and UK date.
-    Use list_meters for the meter point. For another page pass the same inputs, agreement_id
-    and returned next_cursor as after. Amounts are upstream net values, without a verified
-    currency scale or statement reconciliation. Rows can span more than a half hour.
+def billing(meter_point: str | None = None, day: str | None = None, agreement_id: str | None = None,
+            after: str | None = None, month: str | None = None) -> dict:
+    """List account bills issued during a UK calendar month (YYYY-MM), including invoices.
+    Use month alone for issued bills. Add an import meter_point for monthly consumption charge
+    lines instead. For older callers day and meter_point request a single day. Continue with
+    next_cursor as after and the same inputs, including the selected agreement_id for meter lines.
     """
-    start, end = uk_date_window(day, day)
-    if not meter_point.strip() or (after is not None and (not after or not agreement_id)):
-        raise ValueError('Provide a meter point and pair any page cursor with its agreement ID.')
+    if (day is None) == (month is None):
+        raise ValueError('Provide exactly one of month (YYYY-MM) or day (YYYY-MM-DD).')
+    if after is not None and not after:
+        raise ValueError('Provide a nonempty page cursor.')
+    if month is not None:
+        if not re.fullmatch(r'[0-9]{4}-[0-9]{2}', month):
+            raise ValueError('Use YYYY-MM for the billing month.')
+        first = date.fromisoformat(month + '-01')
+        last = first.replace(day=monthrange(first.year, first.month)[1])
+        if meter_point is None and agreement_id is None:
+            return monthly_bills(month, first, last, after)
+        start, end = uk_date_window(first.isoformat(), last.isoformat())
+        period = {'month': month, 'start_date': first.isoformat(), 'end_date_inclusive': last.isoformat()}
+    else:
+        start, end = uk_date_window(day, day)
+        period = {'day': day}
+    if not meter_point or not meter_point.strip() or (after is not None and not agreement_id):
+        raise ValueError('Provide a meter point and pair any meter page cursor with its agreement ID.')
     token = graphql_token()
     inventory = graphql_request(BILLING_AGREEMENTS, {'account': ACCOUNT, 'start': start.isoformat()}, token)
     try:
@@ -528,21 +590,18 @@ def billing(meter_point: str, day: str, agreement_id: str | None = None,
     except (KeyError, TypeError, AttributeError):
         raise ValueError('Kraken returned incomplete billing agreement data.') from None
     if not candidates or (agreement_id is not None and agreement_id not in candidates):
-        raise ValueError('No matching import agreement for this account, point and day.')
+        raise ValueError('No matching import agreement for this account, point and requested period.')
     if agreement_id is None and len(candidates) > 1:
         return {'status': 'select_agreement', 'agreement_ids': sorted(candidates)}
     selected = agreement_id or next(iter(candidates))
-    data = graphql_request(BILLING_ITEMS, {'id': selected, 'start': start.isoformat(), 'after': after}, token)
+    variables = {'id': selected, 'start': start.isoformat(), 'after': after,
+                 'grouping': 'MONTH' if month is not None else 'HALF_HOUR'}
+    data = graphql_request(BILLING_ITEMS, variables, token)
     records = []
     try:
         page = data['electricityAgreement']['lineItems']
-        info = page['pageInfo']
-        more = info['hasNextPage']
-        cursor = info['endCursor'] if more else None
-        if (not isinstance(more, bool) or not isinstance(page['edges'], list)
-                or (more and (not isinstance(cursor, str) or not cursor or cursor == after))):
-            raise ValueError
-        for edge in page['edges']:
+        edges, cursor = billing_page(page, after)
+        for edge in edges:
             row = edge['node']
             left = parse_api_datetime(row['startAt'])
             right = parse_api_datetime(row['endAt'])
@@ -553,7 +612,7 @@ def billing(meter_point: str, day: str, agreement_id: str | None = None,
                     'startAt', 'endAt', 'netAmount', 'numberOfUnits', 'settlementUnit', 'itemType')})
     except (KeyError, TypeError, ValueError):
         raise ValueError('Kraken returned incomplete billing line item data.') from None
-    return {'status': 'ok', 'source': 'Kraken electricityAgreement.lineItems', 'day': day,
+    return {'status': 'ok', 'source': 'Kraken electricityAgreement.lineItems', **period,
             'agreement_id': selected, 'records': records, 'next_cursor': cursor,
             'amount_basis': 'Upstream netAmount; currency scale and final billed rate unverified.'}
 
