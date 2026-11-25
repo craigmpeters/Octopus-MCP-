@@ -17,6 +17,8 @@ The diagnostic uses the running container's configured account and key. It selec
 
 The output reports counts for the first page of up to 100 rows, including distinct values, half-hour intervals, overlaps, rows outside the selected day, and how many minutes the returned intervals cover. If `has_more_pages` is true, coverage describes the first page only. An empty page confirms query access for the sample but leaves applicability unverified. A token-exchange error and an error from the subsequent query are reported separately.
 
+The `minutes_with_multiple_distinct_values` count measures how long two or more different numeric values coincide within the selected UK day on the first page. Each minute counts once even when three rows overlap. Equal prices and rows that only touch at an endpoint contribute zero. A positive count leaves rate precedence unresolved.
+
 The schema describes the response as rates applicable to an account and meter point over a time period. Verify the semantics against a known tariff change or charging period and corroborate the units and VAT basis with Octopus before using the values in a cost calculation. The aggregate output contains no meter identifiers, tokens, raw prices, or individual interval timestamps.
 
 ## Live check on 18 November 2026
