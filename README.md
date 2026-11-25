@@ -39,7 +39,15 @@ Use the MCP responses as inputs to calculations in ChatGPT or Jupyter. The serve
 
 Use the supply-point direction and meter-selection status returned by `list_meters`. If a supply point has multiple meter candidates, the account API does not provide enough physical meter validity data to identify the current one safely. Meter data can be late or incomplete. Data uses London calendar dates, including daylight saving transitions. Consumption responses identify agreements overlapping the requested dates. Electricity consumption is reported in kWh. Gas units are resolved for the selected meter using Kraken GraphQL `consumptionUnits`; SMETS1 data is documented as kWh and SMETS2 as m³. If the unit lookup fails or omits a historical meter, the unit remains explicitly unknown. No gas conversion is applied. Standard tariff rates do not fully model Intelligent Octopus dispatch or other special rates: costs are estimates, not bills. The API does not identify separate car consumption from the household meter. This version does not retrieve EV dispatch slots or real-time usage.
 
-### Estimate export credit
+### Check electricity import billing
+
+Use `list_meters` to select an electricity import meter point. Ask `billing` for that `meter_point` and a UK calendar `day` such as `2026-11-08`. If several agreements overlap the day, repeat the call with a returned `agreement_id` for each agreement of interest.
+
+The tool requests consumption charge line items from Kraken with half-hour grouping. Inspect the actual start and end of each record before comparing it with a meter reading. A row can span a longer interval, including a day boundary. The full row amount and quantity apply to that entire period. For additional pages, pass the returned `next_cursor` as `after` with the same meter point, date and agreement ID. An empty page can still have a continuation. An empty result does not establish a zero charge.
+
+Kraken supplies `netAmount`, `numberOfUnits` and `settlementUnit`. Its schema does not specify the currency scale for this amount or identify a final statement in these rows. Confirm the units, tax treatment and statement reconciliation before using a line to infer a billed unit rate.
+
+## Estimate export credit
 
 1. Use `list_meters` to find the electricity export supply point, then call `consumption` for its meter and the desired UK dates. Check `coverage` before calculating a total. Keep any import readings separate.
 2. Use `applicable_agreements` to identify the export tariff code for each part of the window. For a code like `E-1R-EXAMPLE-A`, use `EXAMPLE` as the candidate product code. Confirm the exact tariff code in the product's regional variants with `tariff_product`, then call `tariff_rates` with `fuel: electricity` and the same date window. The response includes the upstream endpoints, UTC period, units, and empty rate categories.

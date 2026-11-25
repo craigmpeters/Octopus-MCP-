@@ -474,5 +474,89 @@ def tariff_ev_rates(product_code: str, tariff_code: str, start_date: str, end_da
                  'Account-specific EV dispatches and rate applicability require separate data.'),
     }
 
+BILLING_AGREEMENTS = """
+query BillingAgreements($account: String!, $start: DateTime!) {
+  account(accountNumber: $account) {
+    properties(activeFrom: $start) {
+      electricityMeterPoints {
+        mpan direction agreements(includeInactive: true, validAfter: $start) {
+          id valid_from: validFrom valid_to: validTo
+        }
+      }
+    }
+  }
+}
+"""
+
+BILLING_ITEMS = """
+query BillingItems($id: ID!, $start: DateTime!, $after: String) {
+  electricityAgreement(id: $id) {
+    ... on ElectricityAgreementType {
+      lineItems(startAt: $start, grouping: HALF_HOUR, itemType: CONSUMPTION_CHARGE,
+                timezone: "Europe/London", first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        edges { node { startAt endAt netAmount numberOfUnits settlementUnit itemType } }
+      }
+    }
+  }
+}
+"""
+
+
+@mcp.tool()
+def billing(meter_point: str, day: str, agreement_id: str | None = None,
+            after: str | None = None) -> dict:
+    """Get Kraken consumption charge lines for an account electricity import point and UK date.
+    Use list_meters for the meter point. For another page pass the same inputs, agreement_id
+    and returned next_cursor as after. Amounts are upstream net values, without a verified
+    currency scale or statement reconciliation. Rows can span more than a half hour.
+    """
+    start, end = uk_date_window(day, day)
+    if not meter_point.strip() or (after is not None and (not after or not agreement_id)):
+        raise ValueError('Provide a meter point and pair any page cursor with its agreement ID.')
+    token = graphql_token()
+    inventory = graphql_request(BILLING_AGREEMENTS, {'account': ACCOUNT, 'start': start.isoformat()}, token)
+    try:
+        candidates = {
+            str(agreement['id'])
+            for prop in inventory['account']['properties']
+            for point in prop['electricityMeterPoints']
+            if point['mpan'] == meter_point and point['direction'] == 'IMPORT'
+            for agreement in point['agreements']
+            if agreement['id'] is not None and agreement_overlaps(agreement, start, end)
+        }
+    except (KeyError, TypeError, AttributeError):
+        raise ValueError('Kraken returned incomplete billing agreement data.') from None
+    if not candidates or (agreement_id is not None and agreement_id not in candidates):
+        raise ValueError('No matching import agreement for this account, point and day.')
+    if agreement_id is None and len(candidates) > 1:
+        return {'status': 'select_agreement', 'agreement_ids': sorted(candidates)}
+    selected = agreement_id or next(iter(candidates))
+    data = graphql_request(BILLING_ITEMS, {'id': selected, 'start': start.isoformat(), 'after': after}, token)
+    records = []
+    try:
+        page = data['electricityAgreement']['lineItems']
+        info = page['pageInfo']
+        more = info['hasNextPage']
+        cursor = info['endCursor'] if more else None
+        if (not isinstance(more, bool) or not isinstance(page['edges'], list)
+                or (more and (not isinstance(cursor, str) or not cursor or cursor == after))):
+            raise ValueError
+        for edge in page['edges']:
+            row = edge['node']
+            left = parse_api_datetime(row['startAt'])
+            right = parse_api_datetime(row['endAt'])
+            if left is None or right is None or right <= left:
+                raise ValueError
+            if left < end and right > start:
+                records.append({key: row[key] for key in (
+                    'startAt', 'endAt', 'netAmount', 'numberOfUnits', 'settlementUnit', 'itemType')})
+    except (KeyError, TypeError, ValueError):
+        raise ValueError('Kraken returned incomplete billing line item data.') from None
+    return {'status': 'ok', 'source': 'Kraken electricityAgreement.lineItems', 'day': day,
+            'agreement_id': selected, 'records': records, 'next_cursor': cursor,
+            'amount_basis': 'Upstream netAmount; currency scale and final billed rate unverified.'}
+
+
 if __name__ == '__main__':
     mcp.run(transport='streamable-http')

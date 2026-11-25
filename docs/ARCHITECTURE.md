@@ -11,17 +11,18 @@ flowchart LR
     Local[Local MCP client] --> Host
     Host --> Service["FastMCP /mcp · container port 8000"]
     Service -->|Account, consumption, products and rates| REST[Octopus REST API]
-    Service -->|Token exchange and gas unit lookup| Kraken[Kraken GraphQL API]
+    Service -->|Token exchange, gas units and billing| Kraken[Kraken GraphQL API]
 ```
 
 The tunnel is configured separately by the operator. Compose publishes the container's `0.0.0.0:8000` listener on `127.0.0.1:8765`. FastMCP serves stateless Streamable HTTP with JSON responses. The application has no caller authentication. Any caller with network access to the listener can use the configured account, including peers that can reach the container directly. Meter ownership checks limit the selected meter to that account. The deployment guide covers tunnel setup and verification. [README](../README.md)
 
 ### Tool surface
 
-All seven synchronous tools, their domain logic and the HTTP adapters live in [server.py](../server.py).
+All eight synchronous tools, their domain logic and the HTTP adapters live in [server.py](../server.py).
 
 | Tool | Data flow and result |
 | --- | --- |
+| `billing` | Checks the configured account’s import agreements and returns one page of Kraken consumption charge lines intersecting a UK day. |
 | `list_meters` | Reads account properties and groups meter candidates and agreements by supply point. Returns the compatible flat meter list alongside selection metadata. |
 | `consumption` | Matches fuel, point and serial against the account inventory before fetching readings. Returns sorted half-hours, coverage gaps, overlapping agreements and measurement metadata. |
 | `tariff_products` | Pages through published products at a timezone-aware instant. Household eligibility is unknown. |
