@@ -44,7 +44,7 @@ def test_check_uses_configured_account_and_prints_aggregate_only(monkeypatch, ca
         'rows_on_first_page': 4, 'has_more_pages': True, 'rows_intersecting_day': 2,
         'half_hour_rows_intersecting_day': 2, 'distinct_values_in_day': 1, 'rows_outside_day': 1,
         'rows_missing_valid_bounds_or_value': 1, 'overlapping_rows_in_day': 1,
-        'covered_minutes_in_day': 45, 'minutes_in_day': 1500,
+        'minutes_with_multiple_distinct_values': 0, 'covered_minutes_in_day': 45, 'minutes_in_day': 1500,
     }
     assert not captured.err
     assert str(requests[1].url) == str(requests[2].url) == server.GRAPHQL_API
@@ -79,3 +79,22 @@ def test_check_requires_one_import_supply_before_token_exchange(monkeypatch):
 
     with pytest.raises(ValueError, match='exactly one electricity import supply point'):
         check.check_applicable_rates('2025-10-26')
+
+
+def test_distinct_value_overlap_counts_each_minute_once_within_window():
+    start, end = server.uk_date_window('2026-01-01', '2026-01-01')
+    rows = [
+        ('2025-12-31T23:30Z', '2026-01-01T01:00Z', '1'),
+        ('2025-12-31T23:45Z', '2026-01-01T00:30Z', '1.0'),
+        ('2025-12-31T23:50Z', '2026-01-01T00:45Z', '2'),
+        ('2026-01-01T00:15Z', '2026-01-01T00:35Z', '3'),
+        ('2026-01-01T01:00Z', '2026-01-02T00:30Z', '4'),
+        ('2026-01-01T23:45Z', '2026-01-02T00:45Z', '5'),
+    ]
+    page = {
+        'pageInfo': {'hasNextPage': False},
+        'edges': [{'node': {'validFrom': a, 'validTo': b, 'value': value}}
+                  for a, b, value in reversed(rows)],
+    }
+    summary = check.summarize(page, start, end)
+    assert summary['minutes_with_multiple_distinct_values'] == 60

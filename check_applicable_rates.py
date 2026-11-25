@@ -2,6 +2,7 @@
 import argparse
 import json
 import logging
+from collections import Counter, defaultdict
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
@@ -28,6 +29,7 @@ def summarize(connection, start, end):
         raise ValueError('Kraken returned an invalid applicableRates page.')
 
     values, intervals = set(), []
+    changes = defaultdict(Counter)
     invalid = outside = half_hours = 0
     for edge in edges:
         try:
@@ -47,7 +49,11 @@ def summarize(connection, start, end):
         values.add(value)
         if interval_end - interval_start == timedelta(minutes=30):
             half_hours += 1
-        intervals.append((max(start, interval_start), min(end, interval_end)))
+        clipped_start = max(start, interval_start)
+        clipped_end = min(end, interval_end)
+        intervals.append((clipped_start, clipped_end))
+        changes[clipped_start][value] += 1
+        changes[clipped_end][value] -= 1
 
     covered = timedelta()
     overlapping = 0
@@ -59,6 +65,18 @@ def summarize(connection, start, end):
             covered += interval_end - max(interval_start, covered_end)
             covered_end = interval_end
 
+    distinct_overlap = timedelta()
+    active = Counter()
+    previous = start
+    for boundary, deltas in sorted(changes.items()):
+        if len(active) > 1:
+            distinct_overlap += boundary - previous
+        for value, delta in deltas.items():
+            active[value] += delta
+            if active[value] == 0:
+                del active[value]
+        previous = boundary
+
     return {
         'rows_on_first_page': len(edges),
         'has_more_pages': has_next_page,
@@ -68,6 +86,7 @@ def summarize(connection, start, end):
         'rows_outside_day': outside,
         'rows_missing_valid_bounds_or_value': invalid,
         'overlapping_rows_in_day': overlapping,
+        'minutes_with_multiple_distinct_values': distinct_overlap.total_seconds() / 60,
         'covered_minutes_in_day': covered.total_seconds() / 60,
         'minutes_in_day': (end - start).total_seconds() / 60,
     }
