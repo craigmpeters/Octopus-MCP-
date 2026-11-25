@@ -531,6 +531,58 @@ def billing_page(page, after):
     return edges, cursor
 
 
+STATEMENT_TRANSACTIONS = """
+query StatementTransactions($account: String!, $id: ID!, $after: String) {
+  account(accountNumber: $account) {
+    bill(id: $id, billType: STATEMENT) {
+      __typename id billType issuedDate
+      ... on StatementType {
+        transactions(first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          edges { node {
+            id kind: __typename postedDate title note reasonCode isReversed amounts { net tax gross }
+          } }
+        }
+      }
+      ... on PeriodBasedDocumentType {
+        documentTransactions: transactions(first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          edges { node { id kind: __typename postedDate title note reasonCode amounts { net tax gross } } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+@mcp.tool()
+def statement_transactions(statement_id: str, after: str | None = None) -> dict:
+    """Read one page of transactions for an issued STATEMENT id from billing(month=...).
+    Search title, note and reasonCode for charge descriptions. postedDate is the posting
+    date. Amounts are in minor currency units. Pass next_cursor as after for more rows.
+    """
+    if not statement_id.strip() or (after is not None and not after.strip()):
+        raise ValueError('Provide a statement ID and omit the cursor for the first page.')
+    variables = {'account': ACCOUNT, 'id': statement_id, 'after': after}
+    data = graphql_request(STATEMENT_TRANSACTIONS, variables, graphql_token())
+    try:
+        bill = data['account']['bill']
+        if (bill is None or bill['id'] != statement_id or bill['billType'] != 'STATEMENT'
+                or not bill['issuedDate']):
+            raise ValueError
+        connection_field = {'StatementType': 'transactions',
+                            'PeriodBasedDocumentType': 'documentTransactions'}[bill['__typename']]
+        edges, cursor = billing_page(bill[connection_field], after)
+        records = [edge['node'] for edge in edges]
+        if any(not isinstance(row, dict) for row in records):
+            raise ValueError
+    except (KeyError, ValueError, TypeError):
+        raise ValueError('Issued statement or its transactions unavailable for this account.') from None
+    return {'statement_id': statement_id, 'issued_date': bill['issuedDate'],
+            'amount_unit': 'minor currency units', 'records': records, 'next_cursor': cursor}
+
+
 def monthly_bills(month, first, last, after):
     variables = {'account': ACCOUNT, 'start': first.isoformat(),
                  'end': (last + timedelta(days=1)).isoformat(), 'after': after}

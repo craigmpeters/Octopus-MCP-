@@ -18,11 +18,12 @@ The tunnel is configured separately by the operator. Compose publishes the conta
 
 ### Tool surface
 
-All eight synchronous tools, their domain logic and the HTTP adapters live in [server.py](../server.py).
+All nine synchronous tools, their domain logic and the HTTP adapters live in [server.py](../server.py).
 
 | Tool | Data flow and result |
 | --- | --- |
 | `billing` | Lists configured-account bills by calendar month of issue. With an import meter point, retrieves charge lines for a UK month or a legacy day query. |
+| `statement_transactions` | Reads one cursor page of transactions from an issued statement under the configured account. |
 | `list_meters` | Reads account properties and groups meter candidates and agreements by supply point. Returns the compatible flat meter list alongside selection metadata. |
 | `consumption` | Matches fuel, point and serial against the account inventory before fetching readings. Returns sorted half-hours, coverage gaps, overlapping agreements and measurement metadata. |
 | `tariff_products` | Pages through published products at a timezone-aware instant. Household eligibility is unknown. |
