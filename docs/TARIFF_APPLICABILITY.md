@@ -25,4 +25,8 @@ The schema describes the response as rates applicable to an account and meter po
 
 An authenticated query for one UK day returned four rows on a single page. All four intersected the day and had valid bounds and values. There were two distinct values and zero 30-minute rows. The union of the returned intervals covered all 1,440 minutes, and three rows started before an earlier row ended.
 
-The aggregate counts leave open whether the two distinct values coincided during an overlap, which value Kraken applies when rows overlap, and whether any row corresponds to an EV dispatch. Confirm interval precedence and price semantics with a known event or statement before using the rates for billing estimates.
+## Follow-up overlap measurement
+
+The operator reported four valid rows on a single page for one UK day. The diagnostic counted two distinct values and 1,440 minutes with multiple distinct values across a 1,440-minute day. Both values therefore covered every minute of the sample. The summary omitted the sample date.
+
+Interval timing alone leaves both values as candidates throughout the day. Identifying the billed rate requires independent evidence, such as an itemised statement for a known period. The rate units, VAT basis and connection to EV dispatch also remain unverified.
