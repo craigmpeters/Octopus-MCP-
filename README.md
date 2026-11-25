@@ -49,6 +49,12 @@ For another page, use `next_cursor` as `after` with the same month and filters. 
 
 Kraken supplies `netAmount`, `numberOfUnits` and `settlementUnit`. Its schema does not specify the currency scale for this amount or identify a final statement in these rows. Confirm the units, tax treatment and statement reconciliation before using a line to infer a billed unit rate.
 
+### Look up statement transactions
+
+Pass the `id` of a `STATEMENT` from `billing(month=...)` to `statement_transactions(statement_id=...)`. Follow each `next_cursor` as `after` with the same statement ID until the cursor is null. A successful empty page can still have a continuation.
+
+To find EV charging entries, search each transaction’s `title`, `note`, and `reasonCode` for “Electroverse” and “Electric Juice”, ignoring case. Report the transaction kind, posting date, statement issue date, and available net, tax, or gross amount in minor currency units. Payments may have only a net amount. Check `isReversed` when Kraken supplies it. A posting date can differ from the charging session date.
+
 ## Estimate export credit
 
 1. Use `list_meters` to find the electricity export supply point, then call `consumption` for its meter and the desired UK dates. Check `coverage` before calculating a total. Keep any import readings separate.
