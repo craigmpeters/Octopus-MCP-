@@ -3,13 +3,13 @@
 Run the packaged diagnostic from the directory containing the private deployment's Compose file. Use a UK date with known charging activity if you want to investigate whether returned intervals align with EV charging.
 
 ```sh
-docker compose exec -T octopus-mcp python check_applicable_rates.py 2026-11-08
+docker compose exec -T octopusmcp python check_applicable_rates.py 2026-11-08
 ```
 
-With Docker alone, substitute the running container's name. The shell saves the summary on the host and displays errors in the terminal.
+With Docker alone, run the diagnostic inside the `octopusmcp` container. The shell saves the summary on the host and displays errors in the terminal.
 
 ```sh
-docker exec octopus-mcp-container python /app/check_applicable_rates.py 2026-11-08 \
+docker exec octopusmcp python /app/check_applicable_rates.py 2026-11-08 \
   > applicable-rates-2026-11-08.json
 ```
 
